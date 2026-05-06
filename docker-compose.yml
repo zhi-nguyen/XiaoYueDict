@@ -1,0 +1,47 @@
+version: "3.8"
+
+services:
+  ai-service-en:
+    build:
+      context: ./ai_service_en
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ai_service_en/models_weights:/app/models_weights
+    networks:
+      - language-app-network
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - language-app-network
+
+  core-django:
+    build:
+      context: ./core_django
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+    volumes:
+      - ./core_django:/app
+    networks:
+      - language-app-network
+
+  celery-worker:
+    build:
+      context: ./core_django
+    command: celery -A core_project worker --loglevel=info
+    depends_on:
+      - redis
+      - core-django
+    volumes:
+      - ./core_django:/app
+    networks:
+      - language-app-network
+
+networks:
+  language-app-network:
+    driver: bridge
