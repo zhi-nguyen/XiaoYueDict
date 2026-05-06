@@ -1,0 +1,6 @@
+django>=4.2
+djangorestframework
+celery
+redis
+requests
+django-cors-headers
