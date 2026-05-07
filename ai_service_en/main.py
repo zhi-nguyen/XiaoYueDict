@@ -1,91 +1,128 @@
 import os
-import torch
-import torch.nn as nn
-import librosa
-import asyncio
-import io
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from transformers import Wav2Vec2Model, Wav2Vec2Processor
+import tempfile
+import uuid
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 
-app = FastAPI(title="English Pronunciation Scoring Service")
+# Import the adaptive hardware scorer
+from inference_pipeline import PronunciationScorer
 
-# 1. Khai báo lại chính xác Class đã dùng để train
-class PronunciationScorer(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.wav2vec2 = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base", use_safetensors=True)
-        self.scoring_head = nn.Sequential(
-            nn.Linear(768, 256),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(256, 1),
-            nn.Sigmoid()
-        )
+# Global variable for the model to ensure single initialization
+scorer = None
 
-    def forward(self, input_values):
-        outputs = self.wav2vec2(input_values)
-        hidden_states = outputs.last_hidden_state.mean(dim=1) 
-        score = self.scoring_head(hidden_states)
-        return score
-
-# 2. Khởi tạo toàn cục (Global Initialization)
-# Load processor từ Hugging Face
-processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base")
-
-# Load model weights khi FastAPI khởi động
-model = PronunciationScorer()
-MODEL_PATH = "models_weights/pytorch_model.bin"
-
-# Lưu ý: Load lên CPU để tiết kiệm tài nguyên cho web server, 
-# trừ khi server của muội có GPU chuyên dụng cho inference.
-if os.path.exists(MODEL_PATH):
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device('cpu')))
-    model.eval() # Chuyển sang chế độ suy luận (tắt Dropout)
-    print("✅ Model weights loaded successfully!")
-else:
-    print(f"⚠️ Warning: Model weights not found at {MODEL_PATH}")
-
-# 3. Hàm xử lý logic lõi (chạy đồng bộ, sẽ được ném vào thread riêng)
-def process_and_score(audio_bytes: bytes) -> float:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan event to load the ML models exactly ONCE when the server starts.
+    This respects the hardware-adaptive logic in PronunciationScorer (CUDA vs CPU),
+    prevents memory leaks, and drastically reduces request latency.
+    """
+    global scorer
+    print("🚀 Starting FastAPI Server...")
     try:
-        # Load audio từ bytes trực tiếp trên RAM, chuyển về 16kHz
-        speech, sample_rate = librosa.load(io.BytesIO(audio_bytes), sr=16000, mono=True)
-        
-        # Tránh lỗi CNN của Wav2Vec2 khi audio quá ngắn (ví dụ: bấm record và stop liên tục)
-        import numpy as np
-        if len(speech) < 16000:
-            speech = np.pad(speech, (0, 16000 - len(speech)), mode='constant')
+        scorer = PronunciationScorer()
+        print("✅ PronunciationScorer globally initialized successfully.")
+    except Exception as e:
+        print(f"❌ Failed to initialize PronunciationScorer: {e}")
+        raise e
+    
+    yield
+    
+    # Cleanup on shutdown
+    print("🛑 Shutting down FastAPI Server. Cleaning up ML resources...")
+    scorer = None
 
-        # Chạy qua processor
-        inputs = processor(speech, sampling_rate=16000, return_tensors="pt", padding=True)
+# Initialize FastAPI application
+app = FastAPI(
+    title="English AI Pronunciation Service",
+    description="Microservice for GOP scoring and Spontaneous Speech Decoding",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# Configure CORS for Next.js frontend communication
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust this to specific frontend domains in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+def cleanup_temp_file(file_path: str):
+    """
+    Background task to securely delete temporary audio files after the response is sent,
+    preventing server storage bloat over time.
+    """
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"🗑️ Deleted temporary file: {file_path}")
+    except Exception as e:
+        print(f"⚠️ Failed to delete temporary file {file_path}: {e}")
+
+@app.post("/api/v1/score")
+async def score_endpoint(
+    background_tasks: BackgroundTasks,
+    audio_file: UploadFile = File(...),
+    target_text: str = Form(None)
+):
+    """
+    Dual-Routing Endpoint handling multipart/form-data:
+    - Branch A: If target_text is provided, runs strict GOP Read-Aloud scoring.
+    - Branch B: If target_text is omitted, falls back to Free Decoding ASR.
+    """
+    if not audio_file.filename:
+        raise HTTPException(status_code=400, detail="Audio file is required.")
         
-        # Đưa vào model lấy điểm
-        with torch.no_grad(): # Tắt tính toán gradient để tối ưu tốc độ và RAM
-            logits = model(inputs.input_values)
+    # Safely write the uploaded file to a temporary location on disk
+    temp_dir = tempfile.gettempdir()
+    file_ext = os.path.splitext(audio_file.filename)[1] or ".wav"
+    temp_file_path = os.path.join(temp_dir, f"audio_{uuid.uuid4().hex}{file_ext}")
+    
+    try:
+        with open(temp_file_path, "wb") as f:
+            content = await audio_file.read()
+            f.write(content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save audio file to disk: {str(e)}")
+        
+    # Queue the file deletion to run immediately AFTER the HTTP response is sent
+    background_tasks.add_task(cleanup_temp_file, temp_file_path)
+    
+    # ==========================================
+    # BRANCH A: Read Aloud (Forced Alignment + GOP)
+    # ==========================================
+    if target_text and target_text.strip():
+        print(f"🔄 Routing to strict GOP Scorer. Target text: '{target_text}'")
+        try:
+            # Dispatch the heavy synchronous CPU/GPU inference to a background thread pool
+            # This is critical to prevent the ML block from freezing FastAPI's async event loop
+            result = await run_in_threadpool(scorer.score_audio, temp_file_path, target_text)
             
-        # Điểm trả về đang ở dạng 0.0 - 1.0, nhân 10 để đưa về thang 10 gốc
-        final_score = logits.item() * 10.0
-        return round(final_score, 2)
-    except Exception as e:
-        raise Exception(f"Audio processing error: {str(e)}")
-
-# 4. API Endpoint
-@app.post("/api/score/english")
-async def score_english_audio(audio_file: UploadFile = File(...)):
-    if not audio_file.filename.endswith(('.wav', '.webm', '.mp3')):
-        raise HTTPException(status_code=400, detail="Invalid file format. Only wav, webm, mp3 are supported.")
-    
-    # Đọc file audio thành dạng bytes
-    audio_bytes = await audio_file.read()
-    
-    try:
-        # Đưa tác vụ nặng vào ThreadPool để không block event loop của FastAPI
-        score = await asyncio.to_thread(process_and_score, audio_bytes)
-        
+            if "error" in result:
+                raise HTTPException(status_code=400, detail=result["error"])
+                
+            return result
+            
+        except Exception as e:
+            print(f"❌ GOP Scoring failed during inference: {e}")
+            raise HTTPException(status_code=500, detail="Internal server error during ML inference.")
+            
+    # ==========================================
+    # BRANCH B: Spontaneous Speech (Free Decoding)
+    # ==========================================
+    else:
+        print("🔄 Routing to Free Decoding ASR (Mock)")
+        # Mock logic as requested. Future expansion point for Wav2Vec2 CTC decoding.
         return {
-            "status": "success",
-            "filename": audio_file.filename,
-            "score": score
+            "recognized_text": "Sample text",
+            "fluency_score": 85.0
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    # Standalone execution for local testing
+    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)

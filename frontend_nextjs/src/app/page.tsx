@@ -1,4 +1,5 @@
 import AudioRecorder from '@/components/AudioRecorder'
+import ScoringTest from '@/components/ScoringTest'
 
 export default function Home() {
   return (
@@ -13,6 +14,15 @@ export default function Home() {
           </p>
         </div>
         <AudioRecorder />
+
+        {/* Divider */}
+        <div className="my-12 flex items-center gap-4">
+          <div className="flex-1 h-px bg-gray-200" />
+          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Direct API Test</span>
+          <div className="flex-1 h-px bg-gray-200" />
+        </div>
+
+        <ScoringTest />
       </div>
     </main>
   )

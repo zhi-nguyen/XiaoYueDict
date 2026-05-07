@@ -23,7 +23,7 @@ def process_audio_task(assessment_id, file_path):
         task.save()
         return {"error": "File not found"}
 
-    ai_service_url = "http://ai-service-en:8000/api/score/english"
+    ai_service_url = "http://ai-service-en:8000/api/v1/score"
     
     try:
         with open(file_path, 'rb') as f:
@@ -33,8 +33,8 @@ def process_audio_task(assessment_id, file_path):
             response.raise_for_status()
             score_data = response.json()
             
-            # Extract score from response, expecting {"score": 85} format typically
-            score = score_data.get('score') if isinstance(score_data, dict) else score_data
+            # Extract score: Read-Aloud returns 'overall_score', Free Decoding returns 'fluency_score'
+            score = score_data.get('overall_score') or score_data.get('fluency_score') if isinstance(score_data, dict) else score_data
             
             if score is not None:
                 try:
