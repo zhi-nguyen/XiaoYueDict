@@ -5,3 +5,5 @@ transformers
 librosa
 safetensors
 num2words
+onnx
+onnxruntime

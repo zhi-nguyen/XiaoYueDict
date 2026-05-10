@@ -3,7 +3,16 @@ import sys
 import json
 import torch
 import torchaudio
+import numpy as np
 from text_normalizer import normalize_transcript
+
+# ==========================================
+# CPU THREAD OPTIMIZATION
+# Limiting threads prevents severe context-switching overhead
+# on multi-core CPUs during batch-size=1 inference.
+# ==========================================
+torch.set_num_threads(2)
+torch.set_num_interop_threads(1)
 
 class PronunciationScorer:
     def __init__(self, model_dir=None):
@@ -24,6 +33,21 @@ class PronunciationScorer:
         self.bundle = torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H
         self.alignment_model = self.bundle.get_model().to(self.device)
         self.alignment_model.eval()
+
+        # ==========================================
+        # INT8 Dynamic Quantization for CPU acceleration
+        # Compresses Linear layer weights from FP32 -> INT8
+        # ~4x RAM reduction, ~2-3x speed-up on CPU
+        # ==========================================
+        if self.device.type == "cpu":
+            print("⚡ Quantizing ASR model to INT8 for CPU acceleration...")
+            self.alignment_model = torch.quantization.quantize_dynamic(
+                self.alignment_model,
+                {torch.nn.Linear},  # Only quantize Linear layers (90% of Transformer compute)
+                dtype=torch.qint8
+            )
+            print("✅ ASR model quantized to INT8 successfully.")
+
         self.labels = self.bundle.get_labels()
         self.dictionary = {c: i for i, c in enumerate(self.labels)}
         
@@ -31,6 +55,28 @@ class PronunciationScorer:
         self.floor_score = 15.0
         self.critical_threshold = 0.5
         self.moderate_threshold = 0.75
+        
+        # ==========================================
+        # ONNX Sentence Scorer (INT8 Regression Model)
+        # Provides ML-based sentence-level pronunciation score
+        # ==========================================
+        self.onnx_session = None
+        onnx_path = os.path.join(
+            os.path.dirname(__file__), "models_weights", "pronunciation_scorer_int8.onnx"
+        )
+        if os.path.exists(onnx_path):
+            import onnxruntime as ort
+            print(f"Loading ONNX sentence scorer from {onnx_path}...")
+            sess_options = ort.SessionOptions()
+            sess_options.intra_op_num_threads = 2
+            self.onnx_session = ort.InferenceSession(
+                onnx_path,
+                sess_options=sess_options,
+                providers=["CPUExecutionProvider"],
+            )
+            print("✅ ONNX sentence scorer loaded (INT8, 91 MB).")
+        else:
+            print(f"⚠️ ONNX model not found at {onnx_path}. Sentence scoring disabled.")
         
         print("✅ Pipeline completely initialized.")
 
@@ -173,9 +219,38 @@ class PronunciationScorer:
             num_frames=num_frames
         )
 
-    def score_audio(self, audio_path, transcript):
+    def _predict_sentence_score(self, waveform):
+        """Run ONNX INT8 regression model for sentence-level pronunciation score.
+        
+        Args:
+            waveform: torch.Tensor of shape (1, samples) at 16kHz
+            
+        Returns:
+            float score in [0, 100] or None if ONNX model not available
         """
-        Main pipeline method to align audio and text, then score each word using GOP.
+        if self.onnx_session is None:
+            return None
+            
+        try:
+            # Convert to numpy float32, ensure shape (1, sequence_length)
+            audio_np = waveform.squeeze(0).numpy().astype(np.float32)
+            if audio_np.ndim == 1:
+                audio_np = np.expand_dims(audio_np, axis=0)
+                
+            inputs = {self.onnx_session.get_inputs()[0].name: audio_np}
+            logits = self.onnx_session.run(None, inputs)[0]
+            
+            # Model outputs [0, 1] → scale to [0, 100]
+            raw_score = float(logits[0][0]) * 100.0
+            return max(self.floor_score, min(100.0, round(raw_score, 2)))
+        except Exception as e:
+            print(f"⚠️ ONNX sentence scoring failed: {e}")
+            return None
+
+    def decode_and_score(self, audio_path):
+        """
+        Free Decoding method: Translates audio to text using ASR CTC greedy decoding,
+        and scores the overall fluency using the ONNX sentence model.
         Returns a dict suitable for JSON serialization in FastAPI.
         """
         try:
@@ -184,6 +259,62 @@ class PronunciationScorer:
                 waveform = torchaudio.functional.resample(waveform, sample_rate, 16000)
         except Exception as e:
             return {"error": f"Failed to load audio: {str(e)}"}
+            
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)
+        elif waveform.dim() == 2 and waveform.shape[0] > 1:
+            waveform = waveform[0:1, :]
+            
+        # Wav2Vec2 CNN will crash if audio is too short (needs at least ~400 samples)
+        # We enforce a 0.1 second minimum (1600 samples)
+        if waveform.size(1) < 1600:
+            return {"error": "Audio file is too short. Minimum duration is 0.1 seconds."}
+            
+        # 1. ASR Decoding (Speech-to-Text)
+        with torch.inference_mode():
+            emissions, _ = self.alignment_model(waveform.to(self.device))
+            
+        # Greedy CTC Decoding
+        predicted_ids = torch.argmax(emissions[0], dim=-1).tolist()
+        inv_dict = {v: k for k, v in self.dictionary.items()}
+        
+        transcript = ""
+        prev_idx = -1
+        for idx in predicted_ids:
+            if idx != prev_idx:
+                if idx != 0:  # 0 is the CTC blank token
+                    char = inv_dict.get(idx, "")
+                    if char == '|':
+                        transcript += " "
+                    else:
+                        transcript += char
+            prev_idx = idx
+            
+        transcript = transcript.strip().replace("  ", " ")
+        
+        # 2. Fluency Scoring (ONNX ML Model)
+        sentence_score = self._predict_sentence_score(waveform)
+        
+        return {
+            "recognized_text": transcript if transcript else "No speech detected",
+            "fluency_score": sentence_score if sentence_score is not None else self.floor_score
+        }
+
+    def score_audio(self, audio_path, transcript):
+        """
+        Main pipeline method to align audio and text, then score each word using GOP.
+        Also runs ONNX sentence-level scoring if available.
+        Returns a dict suitable for JSON serialization in FastAPI.
+        """
+        try:
+            waveform, sample_rate = torchaudio.load(audio_path)
+            if sample_rate != 16000:
+                waveform = torchaudio.functional.resample(waveform, sample_rate, 16000)
+        except Exception as e:
+            return {"error": f"Failed to load audio: {str(e)}"}
+            
+        if waveform.size(1) < 1600:
+            return {"error": "Audio file is too short. Minimum duration is 0.1 seconds."}
             
         if not transcript.strip():
             return {"error": "Transcript cannot be empty."}
@@ -215,18 +346,37 @@ class PronunciationScorer:
             total_score += word_data['score']
             valid_words += 1
                 
-        # Compute overall score using Harmonic Mean to heavily penalize poor words
-        overall_score = 0.0
+        # Compute GOP overall score using Harmonic Mean
+        gop_score = 0.0
         if valid_words > 0:
             harmonic_sum = sum(1.0 / max(w['score'], 1.0) for w in word_scores)
-            overall_score = round(valid_words / harmonic_sum, 2)
+            gop_score = round(valid_words / harmonic_sum, 2)
+            gop_score = max(self.floor_score, min(100.0, gop_score))
+        
+        # Run ONNX sentence-level scoring (ML regression model)
+        sentence_score = self._predict_sentence_score(waveform)
+        
+        # Blend: if ONNX available, combine GOP (word-level) + ML (sentence-level)
+        # GOP focuses on individual word accuracy, ML captures fluency/prosody
+        if sentence_score is not None:
+            # 60% GOP (precise word feedback) + 40% ML (holistic sentence quality)
+            overall_score = round(0.6 * gop_score + 0.4 * sentence_score, 2)
             overall_score = max(self.floor_score, min(100.0, overall_score))
+        else:
+            overall_score = gop_score
             
-        return {
+        result = {
             "overall_score": overall_score,
             "word_scores": word_scores,
             "transcript": transcript
         }
+        
+        # Include component scores for transparency
+        if sentence_score is not None:
+            result["gop_score"] = gop_score
+            result["sentence_score"] = sentence_score
+            
+        return result
 
 if __name__ == "__main__":
     print("=== Pronunciation Scoring Pipeline ===")
