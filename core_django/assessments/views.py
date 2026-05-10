@@ -14,10 +14,16 @@ class SubmitAssessmentView(APIView):
         if not audio_file:
             return Response({'error': 'No audio file provided'}, status=status.HTTP_400_BAD_REQUEST)
 
-        task = AssessmentTask.objects.create(audio_file=audio_file, status='PENDING')
+        target_text = request.data.get('target_text', '')
+
+        task = AssessmentTask.objects.create(
+            audio_file=audio_file,
+            target_text=target_text,
+            status='PENDING'
+        )
         
-        # Trigger Celery task
-        process_audio_task.delay(str(task.id), task.audio_file.path)
+        # Trigger Celery task with target_text for GOP scoring
+        process_audio_task.delay(str(task.id), task.audio_file.path, target_text)
 
         return Response({'task_id': str(task.id)}, status=status.HTTP_202_ACCEPTED)
 

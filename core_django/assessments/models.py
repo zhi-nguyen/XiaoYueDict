@@ -11,6 +11,7 @@ class AssessmentTask(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     audio_file = models.FileField(upload_to='audio_temp/')
+    target_text = models.TextField(blank=True, default='')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
     score = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
