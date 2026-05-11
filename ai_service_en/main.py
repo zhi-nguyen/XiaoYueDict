@@ -1,6 +1,7 @@
 import os
 import tempfile
 import uuid
+import traceback
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -107,20 +108,32 @@ async def score_endpoint(
                 
             return result
             
+        except HTTPException:
+            raise
         except Exception as e:
-            print(f"❌ GOP Scoring failed during inference: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error during ML inference.")
+            err_msg = traceback.format_exc()
+            print(f"❌ GOP Scoring failed during inference:\n{err_msg}")
+            raise HTTPException(status_code=500, detail=f"ML Error: {str(e)}")
             
     # ==========================================
     # BRANCH B: Spontaneous Speech (Free Decoding)
     # ==========================================
     else:
-        print("🔄 Routing to Free Decoding ASR (Mock)")
-        # Mock logic as requested. Future expansion point for Wav2Vec2 CTC decoding.
-        return {
-            "recognized_text": "Sample text",
-            "fluency_score": 85.0
-        }
+        print("🔄 Routing to Free Decoding ASR")
+        try:
+            result = await run_in_threadpool(scorer.decode_and_score, temp_file_path)
+            
+            if "error" in result:
+                raise HTTPException(status_code=400, detail=result["error"])
+                
+            return result
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            err_msg = traceback.format_exc()
+            print(f"❌ Free Decoding failed during inference:\n{err_msg}")
+            raise HTTPException(status_code=500, detail=f"ML Error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

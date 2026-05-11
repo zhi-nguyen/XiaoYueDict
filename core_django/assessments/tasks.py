@@ -4,9 +4,11 @@ from celery import shared_task
 from .models import AssessmentTask
 
 @shared_task
-def process_audio_task(assessment_id, file_path):
+def process_audio_task(assessment_id, file_path, target_text=''):
     """
     Reads an audio file from local path and sends it to the ai-service-en for scoring.
+    If target_text is provided, routes to GOP Read-Aloud scoring (Branch A).
+    Otherwise, routes to Free Decoding ASR (Branch B).
     """
     try:
         task = AssessmentTask.objects.get(id=assessment_id)
@@ -28,7 +30,10 @@ def process_audio_task(assessment_id, file_path):
     try:
         with open(file_path, 'rb') as f:
             files = {'audio_file': (os.path.basename(file_path), f, 'audio/wav')}
-            response = requests.post(ai_service_url, files=files)
+            data = {}
+            if target_text and target_text.strip():
+                data['target_text'] = target_text
+            response = requests.post(ai_service_url, files=files, data=data)
             
             response.raise_for_status()
             score_data = response.json()
