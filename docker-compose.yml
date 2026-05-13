@@ -1,42 +1,87 @@
 version: "3.8"
 
 services:
+  # ── Message Broker ──
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - language-app-network
+
+  # ── English AI Service (Faster-Whisper Large-v3, INT8 CPU) ──
   ai-service-en:
     build:
       context: ./ai_service_en
     ports:
       - "8000:8000"
     volumes:
-      - ./ai_service_en/models_weights:/app/models_weights
+      - ./ai_service_en/models_cache:/app/models_cache
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     networks:
       - language-app-network
 
-  redis:
-    image: redis:alpine
+  # ── Chinese AI Service (FunASR Paraformer-zh) ──
+  ai-service-zh:
+    build:
+      context: ./ai_service_zh
     ports:
-      - "6379:6379"
+      - "8001:8001"
+    volumes:
+      - ./ai_service_zh/models_cache:/app/models_cache
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
     networks:
       - language-app-network
 
+  # ── Django Gateway API ──
   core-django:
     build:
       context: ./core_django
     ports:
       - "8080:8080"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - AI_SERVICE_EN_URL=http://ai-service-en:8000/api/v1/score
+      - AI_SERVICE_ZH_URL=http://ai-service-zh:8001/api/v1/score
     volumes:
       - ./core_django:/app
     networks:
       - language-app-network
 
+  # ── Celery Worker (processes audio tasks) ──
   celery-worker:
     build:
       context: ./core_django
-    command: celery -A core_project worker --loglevel=info
+    command: celery -A core_project worker --loglevel=info --concurrency=2
     depends_on:
-      - redis
-      - core-django
+      redis:
+        condition: service_healthy
+      core-django:
+        condition: service_started
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - AI_SERVICE_EN_URL=http://ai-service-en:8000/api/v1/score
+      - AI_SERVICE_ZH_URL=http://ai-service-zh:8001/api/v1/score
     volumes:
       - ./core_django:/app
     networks:
@@ -45,3 +90,4 @@ services:
 networks:
   language-app-network:
     driver: bridge
+

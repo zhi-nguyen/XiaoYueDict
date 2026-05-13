@@ -1,9 +1,6 @@
 fastapi
 uvicorn
 python-multipart
-transformers
+pydantic
+faster-whisper
 librosa
-safetensors
-num2words
-onnx
-onnxruntime
