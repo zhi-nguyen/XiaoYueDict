@@ -1,20 +1,19 @@
 "use client";
 
 import React from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 
-interface SidebarProps {
-  currentPage: string;
-  onNavigate: (page: string) => void;
-}
+const navItems = [
+  { href: '/', icon: 'home', label: 'Trang chủ' },
+  { href: '/study', icon: 'book', label: 'Tra từ & Học tập' },
+  { href: '/speaking', icon: 'mic', label: 'Luyện Nói AI' },
+  { href: '/writing', icon: 'edit', label: 'Luyện Viết AI' },
+  { href: '/exam', icon: 'emoji_events', label: 'Luyện Thi' },
+];
 
-export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
-  const navItems = [
-    { id: 'home', icon: 'home', label: 'Trang chủ' },
-    { id: 'study', icon: 'book', label: 'Tra từ & Học tập' },
-    { id: 'speaking', icon: 'mic', label: 'Luyện Nói AI' },
-    { id: 'writing', icon: 'edit', label: 'Luyện Viết AI' },
-    { id: 'exam', icon: 'emoji_events', label: 'Luyện Thi' },
-  ];
+export default function Sidebar() {
+  const pathname = usePathname();
 
   return (
     <aside className="w-[260px] h-full bg-surface border-r border-outline flex flex-col shrink-0">
@@ -31,17 +30,16 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
       {/* Main Navigation */}
       <nav className="flex-1 px-4 space-y-1 sidebar-scroll overflow-y-auto overflow-x-hidden pt-4">
         {navItems.map(item => {
-          const isActive = currentPage === item.id;
+          const isActive = pathname === item.href;
           return (
-            <a 
-              key={item.id}
-              href="#" 
-              onClick={(e) => { e.preventDefault(); onNavigate(item.id); }}
+            <Link 
+              key={item.href}
+              href={item.href}
               className={`flex items-center h-12 px-3 rounded-full transition-colors ${isActive ? 'bg-primary text-white' : 'text-secondary hover:bg-hover-bg hover:text-primary'}`}
             >
               <span className={`material-symbols-outlined ${isActive ? 'filled' : ''} w-6 flex justify-center`}>{item.icon}</span>
               <span className="ml-3 font-medium text-[15px]">{item.label}</span>
-            </a>
+            </Link>
           );
         })}
 
@@ -69,10 +67,10 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
 
       {/* Bottom Actions */}
       <div className="p-4 shrink-0 border-t border-outline">
-        <a href="#" className="flex items-center h-12 px-3 rounded-full text-secondary hover:bg-hover-bg hover:text-primary transition-colors">
+        <Link href="#" className="flex items-center h-12 px-3 rounded-full text-secondary hover:bg-hover-bg hover:text-primary transition-colors">
           <span className="material-symbols-outlined w-6 flex justify-center">settings</span>
           <span className="ml-3 font-medium text-[15px]">Cài đặt</span>
-        </a>
+        </Link>
       </div>
     </aside>
   );

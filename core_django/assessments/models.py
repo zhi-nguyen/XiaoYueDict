@@ -1,7 +1,13 @@
 import uuid
 from django.db import models
 
+
 class AssessmentTask(models.Model):
+    LANGUAGE_CHOICES = [
+        ('en', 'English'),
+        ('zh', 'Chinese'),
+    ]
+
     STATUS_CHOICES = [
         ('PENDING', 'Pending'),
         ('PROCESSING', 'Processing'),
@@ -12,9 +18,15 @@ class AssessmentTask(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     audio_file = models.FileField(upload_to='audio_temp/')
     target_text = models.TextField(blank=True, default='')
+    language = models.CharField(max_length=5, choices=LANGUAGE_CHOICES, default='en')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
     score = models.FloatField(null=True, blank=True)
+    result_data = models.JSONField(null=True, blank=True)
+    error_message = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        ordering = ['-created_at']
+
     def __str__(self):
-        return f"{self.id} - {self.status}"
+        return f"{self.id} - {self.language} - {self.status}"

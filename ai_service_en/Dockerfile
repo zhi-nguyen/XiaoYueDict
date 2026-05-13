@@ -2,20 +2,18 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y libsndfile1 && rm -rf /var/lib/apt/lists/*
+# Install audio processing system dependencies
+RUN apt-get update && apt-get install -y \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Step 1: Install torch + torchaudio from PyTorch CPU index
-# Using --extra-index-url so transitive deps (typing-extensions, etc.) resolve from PyPI
-RUN pip install --no-cache-dir \
-    torch==2.6.0+cpu \
-    torchaudio==2.6.0+cpu \
-    --extra-index-url https://download.pytorch.org/whl/cpu
-
-# Step 2: Install remaining dependencies (torch is NOT in requirements.txt to avoid overwrite)
+# Install Python dependencies (no PyTorch — faster-whisper uses CTranslate2)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy application code
 COPY *.py ./
+COPY scripts/ ./scripts/
 
 EXPOSE 8000
 

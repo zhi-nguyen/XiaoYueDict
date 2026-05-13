@@ -6,34 +6,78 @@ from .models import AssessmentTask
 from .serializers import AssessmentTaskSerializer
 from .tasks import process_audio_task
 
+
 class SubmitAssessmentView(APIView):
+    """
+    POST /api/v1/assessments/submit/
+    Accepts audio + optional target_text + language (en/zh).
+    Saves audio to disk, enqueues a Celery task, returns task_id immediately.
+    """
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request, *args, **kwargs):
         audio_file = request.FILES.get('audio')
         if not audio_file:
-            return Response({'error': 'No audio file provided'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'error': 'No audio file provided.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         target_text = request.data.get('target_text', '')
+        language = request.data.get('language', 'en')
+
+        # Validate language choice
+        if language not in ('en', 'zh'):
+            return Response(
+                {'error': f'Invalid language: {language}. Must be "en" or "zh".'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         task = AssessmentTask.objects.create(
             audio_file=audio_file,
             target_text=target_text,
-            status='PENDING'
+            language=language,
+            status='PENDING',
         )
-        
-        # Trigger Celery task with target_text for GOP scoring
-        process_audio_task.delay(str(task.id), task.audio_file.path, target_text)
 
-        return Response({'task_id': str(task.id)}, status=status.HTTP_202_ACCEPTED)
+        # Trigger Celery task — language determines which AI service to call
+        process_audio_task.delay(
+            str(task.id),
+            task.audio_file.path,
+            target_text,
+            language,
+        )
+
+        # Return initial queue position
+        pending_ahead = AssessmentTask.objects.filter(
+            status__in=['PENDING', 'PROCESSING'],
+            created_at__lt=task.created_at,
+        ).count()
+        queue_position = pending_ahead + 1
+
+        return Response(
+            {
+                'task_id': str(task.id),
+                'queue_position': queue_position,
+                'estimated_wait_seconds': queue_position * 7,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 class AssessmentStatusView(APIView):
+    """
+    GET /api/v1/assessments/status/<task_id>/
+    Returns current status, queue position, and result data when completed.
+    """
     def get(self, request, task_id, *args, **kwargs):
         try:
             task = AssessmentTask.objects.get(id=task_id)
         except AssessmentTask.DoesNotExist:
-            return Response({'error': 'Task not found'}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {'error': 'Task not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         serializer = AssessmentTaskSerializer(task)
         return Response(serializer.data, status=status.HTTP_200_OK)
