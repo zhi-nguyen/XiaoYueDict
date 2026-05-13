@@ -2,7 +2,7 @@
 
 import React from 'react';
 
-export default function Exam() {
+export default function ExamPage() {
   return (
     <div className="flex-1 overflow-y-auto w-full p-8 pb-16">
       <div className="max-w-[1280px] mx-auto">
