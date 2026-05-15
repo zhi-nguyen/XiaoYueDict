@@ -1,5 +1,5 @@
 from django.apps import AppConfig
 
-class AssessmentsConfig(AppConfig):
+class ExamsConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
-    name = 'assessments'
+    name = 'apps.exams'
