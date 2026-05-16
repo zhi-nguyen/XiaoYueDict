@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+funasr
+librosa
+pypinyin
+torch
+torchaudio
+modelscope

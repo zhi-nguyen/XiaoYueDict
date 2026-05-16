@@ -1,0 +1,70 @@
+from django.db import models
+
+class Rank(models.Model):
+    name = models.CharField(max_length=255)
+    point = models.IntegerField()
+    status = models.IntegerField(default=1)
+
+class Skill(models.Model):
+    name = models.CharField(max_length=255)
+    time = models.IntegerField()
+    rank = models.ForeignKey(Rank, on_delete=models.CASCADE)
+    status = models.IntegerField(default=1)
+    is_listening = models.BooleanField(default=False)
+
+class Test(models.Model):
+    name = models.CharField(max_length=255)
+    time = models.IntegerField()
+    rank = models.ForeignKey(Rank, on_delete=models.CASCADE)
+    user_id = models.IntegerField()
+    category_id = models.IntegerField()
+    status = models.IntegerField(default=1)
+    config_step = models.CharField(max_length=255, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    content = models.TextField(blank=True, null=True)
+    log = models.JSONField(blank=True, null=True)
+    purchase = models.IntegerField(default=0)
+    slug = models.SlugField(max_length=255, blank=True, null=True)
+    type_exam = models.CharField(max_length=50, blank=True, null=True)
+    count_question = models.IntegerField(default=0)
+    skills = models.ManyToManyField(Skill, related_name='tests', blank=True)
+
+class Part(models.Model):
+    test = models.ForeignKey(Test, on_delete=models.CASCADE, related_name='parts', null=True, blank=True)
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name='parts')
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+    amount = models.IntegerField()
+    point = models.IntegerField()
+    status = models.IntegerField(default=1)
+    parent = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='children')
+    attachment_audio = models.CharField(max_length=500, blank=True, null=True)
+    bonus = models.CharField(max_length=255, blank=True, null=True)
+
+class Question(models.Model):
+    part = models.ForeignKey(Part, on_delete=models.CASCADE, related_name='questions')
+    rank = models.ForeignKey(Rank, on_delete=models.CASCADE)
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE)
+    parent = models.ForeignKey('self', on_delete=models.CASCADE, blank=True, null=True, related_name='children')
+    type = models.IntegerField()
+    title = models.CharField(max_length=255, blank=True, null=True)
+    content = models.TextField(blank=True, null=True)
+    explain = models.TextField(blank=True, null=True)
+    status = models.IntegerField(default=1)
+    image_group = models.TextField(blank=True, null=True)
+    type_enum = models.IntegerField(default=0)
+    ordering = models.IntegerField(default=0)
+    time_hidden = models.IntegerField(default=0)
+    attachment_image = models.CharField(max_length=500, blank=True, null=True)
+    attachment_audio = models.CharField(max_length=500, blank=True, null=True)
+    explain_json = models.JSONField(blank=True, null=True)
+
+class Answer(models.Model):
+    question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='answers')
+    content = models.TextField(blank=True, null=True)
+    is_answer = models.BooleanField(default=False)
+    text_answer = models.TextField(blank=True, null=True)
+    attachment_image = models.CharField(max_length=500, blank=True, null=True)
+    attachment_audio = models.CharField(max_length=500, blank=True, null=True)
+    count_answer = models.IntegerField(default=0)
+    count_correct = models.IntegerField(default=0)

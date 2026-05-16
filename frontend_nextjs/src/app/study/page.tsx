@@ -1,10 +1,10 @@
 "use client";
 
 import React from 'react';
-import WordCard from '../components/WordCard';
-import PracticeHub from '../components/PracticeHub';
+import WordCard from '@/components/WordCard';
+import PracticeHub from '@/components/PracticeHub';
 
-export default function Study() {
+export default function StudyPage() {
   return (
     <main className="flex-1 overflow-y-auto w-full p-8 pb-16">
       <div className="max-w-[1280px] mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
