@@ -20,6 +20,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'apps.assessments',
     'apps.exams',
+    'apps.notes',
 ]
 
 MIDDLEWARE = [
