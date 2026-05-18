@@ -1,71 +1,104 @@
 version: "3.8"
 
 services:
-  # ── Message Broker ──
+  # ══════════════════════════════════════════════════════════
+  #  INFRASTRUCTURE — 2 CPU / 4 GB RAM
+  # ══════════════════════════════════════════════════════════
+
+  # ── Reverse Proxy & Router ──
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/proxy_params:/etc/nginx/proxy_params:ro
+    depends_on:
+      core-django:
+        condition: service_started
+      ai-service-en:
+        condition: service_started
+      ai-service-zh:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── Message Broker & Result Backend ──
   redis:
     image: redis:alpine
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 1G
+    restart: unless-stopped
     networks:
-      - language-app-network
+      - xiaoyue-network
 
-  # ── English AI Service (Faster-Whisper Large-v3, INT8 CPU) ──
-  ai-service-en:
-    build:
-      context: ./ai_service_en
-    ports:
-      - "8000:8000"
+  # ── Database ──
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: xiaoyue
+      POSTGRES_USER: xiaoyue
+      POSTGRES_PASSWORD: xiaoyue_secret
     volumes:
-      - ./ai_service_en/models_cache:/app/models_cache
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-    networks:
-      - language-app-network
-
-  # ── Chinese AI Service (FunASR Paraformer-zh) ──
-  ai-service-zh:
-    build:
-      context: ./ai_service_zh
-    ports:
-      - "8001:8001"
-    volumes:
-      - ./ai_service_zh/models_cache:/app/models_cache
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", "pg_isready -U xiaoyue"]
+      interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.25"
+          memory: 2816M
+    restart: unless-stopped
     networks:
-      - language-app-network
+      - xiaoyue-network
 
-  # ── Django Gateway API ──
+  # ══════════════════════════════════════════════════════════
+  #  CORE DJANGO — 2 CPU / 6 GB RAM
+  # ══════════════════════════════════════════════════════════
+
+  # ── Django API Gateway ──
   core-django:
     build:
       context: ./core_django
-    ports:
-      - "8080:8080"
     depends_on:
       redis:
         condition: service_healthy
+      db:
+        condition: service_healthy
     environment:
+      - DATABASE_URL=postgres://xiaoyue:xiaoyue_secret@db:5432/xiaoyue
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - AI_SERVICE_EN_URL=http://ai-service-en:8000/api/v1/score
       - AI_SERVICE_ZH_URL=http://ai-service-zh:8001/api/v1/score
     volumes:
       - ./core_django:/app
+      - django_static:/app/staticfiles
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 3G
+    restart: unless-stopped
     networks:
-      - language-app-network
+      - xiaoyue-network
 
   # ── Celery Worker (processes audio tasks) ──
   celery-worker:
@@ -78,16 +111,76 @@ services:
       core-django:
         condition: service_started
     environment:
+      - DATABASE_URL=postgres://xiaoyue:xiaoyue_secret@db:5432/xiaoyue
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - AI_SERVICE_EN_URL=http://ai-service-en:8000/api/v1/score
       - AI_SERVICE_ZH_URL=http://ai-service-zh:8001/api/v1/score
     volumes:
       - ./core_django:/app
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 3G
+    restart: unless-stopped
     networks:
-      - language-app-network
+      - xiaoyue-network
 
+  # ══════════════════════════════════════════════════════════
+  #  AI SERVICE — CHINESE — 2 CPU / 6 GB RAM
+  # ══════════════════════════════════════════════════════════
+
+  ai-service-zh:
+    build:
+      context: ./ai_service_zh
+    volumes:
+      - ./ai_service_zh/models_cache:/app/models_cache
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 6G
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ══════════════════════════════════════════════════════════
+  #  AI SERVICE — ENGLISH — 6 CPU / 16 GB RAM
+  # ══════════════════════════════════════════════════════════
+
+  ai-service-en:
+    build:
+      context: ./ai_service_en
+    volumes:
+      - ./ai_service_en/models_cache:/app/models_cache
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 16G
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+# ── Volumes ──
+volumes:
+  postgres_data:
+  django_static:
+
+# ── Networks ──
 networks:
-  language-app-network:
+  xiaoyue-network:
     driver: bridge
-

@@ -4,3 +4,6 @@ celery
 redis
 requests
 django-cors-headers
+gunicorn
+psycopg2-binary
+dj-database-url
