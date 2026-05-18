@@ -77,7 +77,7 @@ export default function AudioRecorder() {
       if (!taskId) return;
 
       try {
-        const response = await fetch(`http://localhost:8080/api/v1/assessments/status/${taskId}`);
+        const response = await fetch(`http://localhost/api/core/assessments/status/${taskId}`);
         if (!response.ok) throw new Error('Failed to fetch status');
         
         const data = await response.json();
@@ -176,7 +176,7 @@ export default function AudioRecorder() {
       const formData = new FormData();
       formData.append('audio', audioBlob, 'recording.wav');
 
-      const response = await fetch('http://localhost:8080/api/v1/assessments/submit/', {
+      const response = await fetch('http://localhost/api/core/assessments/submit/', {
         method: 'POST',
         body: formData,
       });
