@@ -10,6 +10,7 @@ const navItems = [
   { href: '/speaking', icon: 'mic', label: 'Luyện Nói AI' },
   { href: '/writing', icon: 'edit', label: 'Luyện Viết AI' },
   { href: '/exam', icon: 'emoji_events', label: 'Luyện Thi' },
+  { href: '/notes', icon: 'menu_book', label: 'Sổ Tay' },
 ];
 
 export default function Sidebar() {
@@ -30,7 +31,7 @@ export default function Sidebar() {
       {/* Main Navigation */}
       <nav className="flex-1 px-4 space-y-1 sidebar-scroll overflow-y-auto overflow-x-hidden pt-4">
         {navItems.map(item => {
-          const isActive = pathname === item.href;
+          const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
           return (
             <Link 
               key={item.href}
