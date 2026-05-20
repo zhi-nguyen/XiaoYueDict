@@ -38,6 +38,79 @@ export default function ExamTakePage() {
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [score, setScore] = useState(0);
 
+  // Settings states
+  const [showSettings, setShowSettings] = useState(false);
+  const [speedRate, setSpeedRate] = useState(1.0);
+  const [volume, setVolume] = useState(1.0);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: Event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowSettings(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
+    };
+  }, []);
+
+  // Load settings on mount
+  useEffect(() => {
+    const savedSpeed = localStorage.getItem('exam_audio_speed');
+    if (savedSpeed) setSpeedRate(parseFloat(savedSpeed));
+    const savedVolume = localStorage.getItem('exam_audio_volume');
+    if (savedVolume) setVolume(parseFloat(savedVolume));
+  }, []);
+
+  // Apply settings when audio element is rendered
+  useEffect(() => {
+    if (!loading && exam) {
+      const timer = setTimeout(() => {
+        const savedSpeed = localStorage.getItem('exam_audio_speed');
+        const savedVolume = localStorage.getItem('exam_audio_volume');
+        const speed = savedSpeed ? parseFloat(savedSpeed) : 1.0;
+        const vol = savedVolume ? parseFloat(savedVolume) : 1.0;
+
+        if (audioRef.current) {
+          audioRef.current.playbackRate = speed;
+          audioRef.current.volume = vol;
+        }
+        if (segmentAudioRef.current) {
+          segmentAudioRef.current.playbackRate = speed;
+          segmentAudioRef.current.volume = vol;
+        }
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [loading, exam]);
+
+  const handleSpeedChange = (speed: number) => {
+    setSpeedRate(speed);
+    localStorage.setItem('exam_audio_speed', speed.toString());
+    if (audioRef.current) {
+      audioRef.current.playbackRate = speed;
+    }
+    if (segmentAudioRef.current) {
+      segmentAudioRef.current.playbackRate = speed;
+    }
+  };
+
+  const handleVolumeChange = (vol: number) => {
+    setVolume(vol);
+    localStorage.setItem('exam_audio_volume', vol.toString());
+    if (audioRef.current) {
+      audioRef.current.volume = vol;
+    }
+    if (segmentAudioRef.current) {
+      segmentAudioRef.current.volume = vol;
+    }
+  };
+
   // New state variables for persistence and timer
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
@@ -223,6 +296,10 @@ export default function ExamTakePage() {
       setActiveSegmentId(null);
     }
     if (audioRef.current) {
+      const savedSpeed = localStorage.getItem('exam_audio_speed');
+      const savedVolume = localStorage.getItem('exam_audio_volume');
+      audioRef.current.playbackRate = savedSpeed ? parseFloat(savedSpeed) : 1.0;
+      audioRef.current.volume = savedVolume ? parseFloat(savedVolume) : 1.0;
       audioRef.current.play().catch(console.error);
     }
   };
@@ -242,6 +319,12 @@ export default function ExamTakePage() {
       segmentAudioRef.current.pause();
       segmentAudioRef.current.currentTime = timeToSeconds(startTime) || 0;
       activeSegmentEndTimeRef.current = timeToSeconds(endTime);
+      
+      const savedSpeed = localStorage.getItem('exam_audio_speed');
+      const savedVolume = localStorage.getItem('exam_audio_volume');
+      segmentAudioRef.current.playbackRate = savedSpeed ? parseFloat(savedSpeed) : 1.0;
+      segmentAudioRef.current.volume = savedVolume ? parseFloat(savedVolume) : 1.0;
+      
       segmentAudioRef.current.play().catch(console.error);
       setActiveSegmentId(questionId);
     }
@@ -276,7 +359,75 @@ export default function ExamTakePage() {
           &larr; Quay lại danh sách
         </button>
 
-        <h1 className="text-3xl font-bold text-primary mb-2">{exam.exam_name}</h1>
+        <div className="flex justify-between items-start mb-2 relative">
+          <h1 className="text-3xl font-bold text-primary">{exam.exam_name}</h1>
+          
+          {/* Settings Dropdown Button */}
+          <div className="relative" ref={dropdownRef}>
+            <button 
+              onClick={() => setShowSettings(!showSettings)}
+              className="flex items-center gap-2 px-4 py-2 bg-surface border border-outline hover:bg-hover-bg rounded-xl font-bold text-primary transition-all shadow-sm"
+            >
+              <svg className="w-5 h-5 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              Cài Đặt
+            </button>
+
+            {showSettings && (
+              <div className="absolute right-0 mt-2 w-72 bg-surface border border-outline rounded-2xl p-4 shadow-xl z-50 space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                <h3 className="font-bold text-primary border-b pb-2 mb-2">
+                  Cấu hình âm thanh
+                </h3>
+                
+                {/* Speed rate control */}
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-secondary flex justify-between">
+                    <span>Tốc độ phát (Speed):</span>
+                    <span className="text-primary font-mono">{speedRate.toFixed(2)}x</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    <input 
+                      type="range" 
+                      min="0.5" 
+                      max="2.0" 
+                      step="0.05"
+                      value={speedRate}
+                      onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
+                      className="flex-1 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary"
+                    />
+                  </div>
+                </div>
+
+                {/* Volume control */}
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-secondary flex justify-between">
+                    <span>Âm lượng (Volume):</span>
+                    <span className="text-primary font-mono">{Math.round(volume * 100)}%</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                    </svg>
+                    <input 
+                      type="range" 
+                      min="0" 
+                      max="1" 
+                      step="0.05"
+                      value={volume}
+                      onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                      className="flex-1 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
         <div className="flex flex-wrap gap-4 text-secondary mb-8 pb-6 border-b">
           <span className="font-bold text-primary bg-primary/10 px-3 py-1 rounded-lg">
             Thời gian: {timeRemaining !== null ? formatTime(timeRemaining) : `${exam.total_time_minutes}:00`}

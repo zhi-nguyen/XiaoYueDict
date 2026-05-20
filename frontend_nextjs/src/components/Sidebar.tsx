@@ -3,6 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useLanguage } from '@/context/LanguageContext';
 
 const navItems = [
   { href: '/', icon: 'home', label: 'Trang chủ' },
@@ -15,6 +16,17 @@ const navItems = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { language } = useLanguage();
+
+  const items = navItems.map(item => {
+    if (item.href === '/exam') {
+      return {
+        ...item,
+        label: language === 'zh' ? 'Luyện Thi HSK' : 'Luyện Thi IELTS',
+      };
+    }
+    return item;
+  });
 
   return (
     <aside className="w-[260px] h-full bg-surface border-r border-outline flex flex-col shrink-0">
@@ -30,7 +42,7 @@ export default function Sidebar() {
 
       {/* Main Navigation */}
       <nav className="flex-1 px-4 space-y-1 sidebar-scroll overflow-y-auto overflow-x-hidden pt-4">
-        {navItems.map(item => {
+        {items.map(item => {
           const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
           return (
             <Link 

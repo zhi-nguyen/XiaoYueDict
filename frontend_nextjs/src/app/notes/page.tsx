@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { fetchNotebooks, createNotebook } from '@/lib/api/notes';
+import { fetchNotebooks, createNotebook, deleteNotebook } from '@/lib/api/notes';
 import { Notebook } from '@/types/note';
 
 export default function NotesPage() {
@@ -48,6 +48,20 @@ export default function NotesPage() {
     }
   }
 
+  async function handleDeleteNotebook(e: React.MouseEvent, id: number, name: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm(`Bạn có chắc chắn muốn xóa sổ tay "${name}"? Tất cả từ vựng bên trong sẽ bị xóa.`)) {
+      return;
+    }
+    try {
+      await deleteNotebook(id);
+      setNotebooks(notebooks.filter(nb => nb.id !== id));
+    } catch (err) {
+      alert('Lỗi khi xóa sổ tay');
+    }
+  }
+
   return (
     <div className="flex-1 overflow-y-auto w-full p-8 pb-16">
       <div className="max-w-[1280px] mx-auto">
@@ -87,19 +101,28 @@ export default function NotesPage() {
         {!loading && !error && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {notebooks.map(nb => (
-              <Link key={nb.id} href={`/notes/${nb.id}`} className="bg-surface border border-outline rounded-[1.5rem] p-6 shadow-sm hover:border-outline-variant hover:shadow-md transition-all flex flex-col cursor-pointer group">
-                <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary mb-4 group-hover:scale-110 transition-transform">
-                  <span className="material-symbols-outlined">menu_book</span>
-                </div>
-                <h3 className="font-bold text-xl mb-1 text-primary line-clamp-1">{nb.name}</h3>
-                <p className="text-secondary text-sm mb-4 line-clamp-2 flex-1">
-                  {nb.description || "Chưa có mô tả"}
-                </p>
-                <div className="mt-auto flex items-center text-sm font-medium text-primary/80 bg-primary/5 px-3 py-1.5 rounded-lg w-fit">
-                  <span className="material-symbols-outlined text-[18px] mr-1">translate</span>
-                  {nb.word_count_annotated || 0} từ vựng
-                </div>
-              </Link>
+              <div key={nb.id} className="relative group">
+                <Link href={`/notes/${nb.id}`} className="bg-surface border border-outline rounded-[1.5rem] p-6 shadow-sm hover:border-outline-variant hover:shadow-md transition-all flex flex-col cursor-pointer h-full">
+                  <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary mb-4 group-hover:scale-110 transition-transform">
+                    <span className="material-symbols-outlined">menu_book</span>
+                  </div>
+                  <h3 className="font-bold text-xl mb-1 text-primary line-clamp-1 pr-6">{nb.name}</h3>
+                  <p className="text-secondary text-sm mb-4 line-clamp-2 flex-1">
+                    {nb.description || "Chưa có mô tả"}
+                  </p>
+                  <div className="mt-auto flex items-center text-sm font-medium text-primary/80 bg-primary/5 px-3 py-1.5 rounded-lg w-fit">
+                    <span className="material-symbols-outlined text-[18px] mr-1">translate</span>
+                    {nb.word_count_annotated || 0} từ vựng
+                  </div>
+                </Link>
+                <button
+                  onClick={(e) => handleDeleteNotebook(e, nb.id, nb.name)}
+                  className="absolute top-4 right-4 p-2 text-secondary hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-70 md:opacity-0 group-hover:opacity-100 focus:opacity-100"
+                  title="Xóa sổ tay"
+                >
+                  <span className="material-symbols-outlined text-[20px]">delete</span>
+                </button>
+              </div>
             ))}
           </div>
         )}

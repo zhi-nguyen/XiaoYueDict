@@ -2,8 +2,11 @@
 
 import React from 'react';
 import Link from 'next/link';
+import { useLanguage } from '@/context/LanguageContext';
 
 export default function HomePage() {
+  const { language } = useLanguage();
+
   return (
     <div className="flex-1 overflow-y-auto w-full p-8 pb-16">
       <div className="max-w-[1280px] mx-auto space-y-8">
@@ -13,7 +16,9 @@ export default function HomePage() {
           <div className="relative z-10">
             <h1 className="text-3xl font-bold mb-2">Chào mừng trở lại! 👋</h1>
             <p className="text-white/80 text-lg">
-              Hãy tiếp tục hành trình học tập của bạn với XiaoYueDict
+              {language === 'zh'
+                ? 'Hãy tiếp tục hành trình học tiếng Trung của bạn với XiaoYueDict'
+                : 'Hãy tiếp tục hành trình học tiếng Anh của bạn với XiaoYueDict'}
             </p>
             <div className="flex gap-3 mt-6">
               <Link
@@ -80,7 +85,9 @@ export default function HomePage() {
               </div>
               <h3 className="font-bold text-lg text-primary">Gợi ý bài tập</h3>
             </div>
-            <p className="text-secondary text-sm mb-3">Ôn tập HSK 3 — Phần thi nghe</p>
+            <p className="text-secondary text-sm mb-3">
+              {language === 'zh' ? 'Ôn tập HSK 3 — Phần thi nghe' : 'Ôn tập IELTS — Listening Section'}
+            </p>
             <Link
               href="/exam"
               className="inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline"
@@ -102,7 +109,11 @@ export default function HomePage() {
             </div>
             <div>
               <h3 className="font-bold text-lg text-primary">Luyện Phát Âm AI</h3>
-              <p className="text-secondary text-sm mt-0.5">Ghi âm và nhận điểm từng từ trong 5 giây</p>
+              <p className="text-secondary text-sm mt-0.5">
+                {language === 'zh'
+                  ? 'Ghi âm và nhận điểm từng từ/ký tự trong 5 giây'
+                  : 'Ghi âm và nhận điểm từng từ trong 5 giây'}
+              </p>
             </div>
           </Link>
 
@@ -115,7 +126,11 @@ export default function HomePage() {
             </div>
             <div>
               <h3 className="font-bold text-lg text-primary">Luyện Viết AI</h3>
-              <p className="text-secondary text-sm mt-0.5">Viết văn và nhờ AI chấm chữa ngữ pháp</p>
+              <p className="text-secondary text-sm mt-0.5">
+                {language === 'zh'
+                  ? 'Viết văn tiếng Trung và nhờ AI chấm chữa ngữ pháp'
+                  : 'Viết văn tiếng Anh và nhờ AI chấm chữa ngữ pháp'}
+              </p>
             </div>
           </Link>
         </div>
