@@ -2,9 +2,14 @@ import { Exam } from '@/types/exam';
 
 const API_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost';
 
-export async function fetchExams(level?: string): Promise<Exam[]> {
-  const url = level 
-    ? `${API_BASE}/api/core/exams/?level=${encodeURIComponent(level)}` 
+export async function fetchExams(level?: string, language?: string): Promise<Exam[]> {
+  const params = new URLSearchParams();
+  if (level) params.append('level', level);
+  if (language) params.append('language', language);
+  
+  const queryStr = params.toString();
+  const url = queryStr 
+    ? `${API_BASE}/api/core/exams/?${queryStr}` 
     : `${API_BASE}/api/core/exams/`;
     
   const res = await fetch(url, {

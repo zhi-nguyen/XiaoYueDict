@@ -14,6 +14,12 @@ class Exam(models.Model):
     total_time_minutes = models.IntegerField(default=0, help_text="Thời gian thi (phút)")
     total_score = models.IntegerField(default=0, help_text="Tổng điểm tối đa")
     passing_score = models.IntegerField(default=0, help_text="Điểm đạt")
+    language = models.CharField(
+        max_length=5,
+        choices=[('en', 'English'), ('zh', 'Chinese')],
+        default='zh',
+        help_text="Ngôn ngữ của đề thi (en/zh)"
+    )
 
     # exam_settings
     allow_resume = models.BooleanField(default=True, help_text="Cho phép tiếp tục thi")

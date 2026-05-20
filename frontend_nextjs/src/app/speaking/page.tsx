@@ -5,6 +5,7 @@ import { useSmartQueue } from '@/hooks/useSmartQueue';
 import SmartQueueStatus from '@/components/SmartQueueStatus';
 import ScoreDisplay from '@/components/ScoreDisplay';
 import AudioWaveform from '@/components/AudioWaveform';
+import { useLanguage } from '@/context/LanguageContext';
 
 /** Convert AudioBuffer to 16-bit PCM WAV Blob */
 function audioBufferToWav(buffer: AudioBuffer): Blob {
@@ -45,9 +46,9 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
 
 export default function SpeakingPage() {
   const queue = useSmartQueue();
+  const { language } = useLanguage();
 
   // ── Local State ──
-  const [language, setLanguage] = useState<'en' | 'zh'>('en');
   const [targetText, setTargetText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
@@ -132,36 +133,6 @@ export default function SpeakingPage() {
           <p className="text-secondary mt-1">
             Ghi âm hoặc tải file — AI chấm điểm từng từ trong 5-10 giây
           </p>
-        </div>
-
-        {/* ── Language Toggle ── */}
-        <div className="flex justify-center">
-          <div className="inline-flex bg-hover-bg rounded-full p-1 border border-outline">
-            <button
-              id="lang-en"
-              type="button"
-              onClick={() => setLanguage('en')}
-              className={`px-5 py-2 rounded-full text-sm font-semibold transition-all ${
-                language === 'en'
-                  ? 'bg-primary text-white shadow-sm'
-                  : 'text-secondary hover:text-primary'
-              }`}
-            >
-              🇬🇧 English
-            </button>
-            <button
-              id="lang-zh"
-              type="button"
-              onClick={() => setLanguage('zh')}
-              className={`px-5 py-2 rounded-full text-sm font-semibold transition-all ${
-                language === 'zh'
-                  ? 'bg-primary text-white shadow-sm'
-                  : 'text-secondary hover:text-primary'
-              }`}
-            >
-              🇨🇳 中文
-            </button>
-          </div>
         </div>
 
         {/* ── Main Card ── */}

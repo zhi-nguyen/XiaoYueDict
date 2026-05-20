@@ -1,8 +1,11 @@
 "use client";
 
 import React from 'react';
+import { useLanguage } from '@/context/LanguageContext';
 
 export default function Header() {
+  const { language, setLanguage } = useLanguage();
+
   return (
     <header className="h-[72px] bg-surface border-b border-outline px-6 flex items-center justify-between shrink-0 top-0 sticky z-10">
       {/* Search Bar section */}
@@ -13,7 +16,7 @@ export default function Header() {
           </span>
           <input
             type="text"
-            placeholder="Nhập từ cần tra..."
+            placeholder={language === 'zh' ? "Nhập từ cần tra (Trung - Việt)..." : "Nhập từ cần tra (Anh - Việt)..."}
             className="w-full pl-12 pr-4 py-2.5 bg-hover-bg rounded-full border border-transparent focus:border-sage focus:outline-none focus:ring-0 text-sm font-lexend text-primary placeholder:text-secondary"
           />
         </div>
@@ -21,6 +24,32 @@ export default function Header() {
 
       {/* Right Actions section */}
       <div className="flex items-center space-x-4 ml-6">
+        {/* Language Toggle */}
+        <div className="flex bg-hover-bg rounded-full p-1 border border-outline mr-2 shrink-0">
+          <button
+            onClick={() => setLanguage('zh')}
+            className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1 ${
+              language === 'zh'
+                ? 'bg-primary text-white shadow-sm'
+                : 'text-secondary hover:text-primary'
+            }`}
+          >
+            <span>🇨🇳</span>
+            <span className="hidden sm:inline">Trung</span>
+          </button>
+          <button
+            onClick={() => setLanguage('en')}
+            className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1 ${
+              language === 'en'
+                ? 'bg-primary text-white shadow-sm'
+                : 'text-secondary hover:text-primary'
+            }`}
+          >
+            <span>🇬🇧</span>
+            <span className="hidden sm:inline">Anh</span>
+          </button>
+        </div>
+
         <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-outline hover:bg-hover-bg cursor-pointer transition-colors">
           <span className="material-symbols-outlined text-orange text-[20px] filled">
             local_fire_department

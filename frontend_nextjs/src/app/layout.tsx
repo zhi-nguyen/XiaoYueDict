@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 import Sidebar from '@/components/Sidebar'
 import Header from '@/components/Header'
+import { LanguageProvider } from '@/context/LanguageContext'
 
 export const metadata: Metadata = {
   title: 'XiaoYueDict — AI Pronunciation Assessment',
@@ -27,14 +28,16 @@ export default function RootLayout({
         <meta name="theme-color" content="#334155" />
       </head>
       <body className="font-lexend text-primary bg-content-bg">
-        <div className="flex h-screen w-full bg-content-bg overflow-hidden font-lexend text-primary">
-          <Sidebar />
-          <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-            <Header />
-            {/* Main Content Area */}
-            {children}
+        <LanguageProvider>
+          <div className="flex h-screen w-full bg-content-bg overflow-hidden font-lexend text-primary">
+            <Sidebar />
+            <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+              <Header />
+              {/* Main Content Area */}
+              {children}
+            </div>
           </div>
-        </div>
+        </LanguageProvider>
       </body>
     </html>
   )
