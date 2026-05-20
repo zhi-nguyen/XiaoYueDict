@@ -5,9 +5,10 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-# System dependencies for PostgreSQL client
+# System dependencies for PostgreSQL client + audio processing
 RUN apt-get update && apt-get install -y \
     libpq-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

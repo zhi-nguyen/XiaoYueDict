@@ -30,6 +30,9 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
         level = self.request.query_params.get('level', None)
         if level is not None:
             queryset = queryset.filter(level__iexact=level)
+        language = self.request.query_params.get('language', None)
+        if language is not None:
+            queryset = queryset.filter(language=language)
         return queryset
 
     @action(detail=True, methods=['get'])
@@ -112,6 +115,7 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
                         'exam_name': metadata.get('exam_name', ''),
                         'exam_version': metadata.get('exam_version', '1.0'),
                         'level': metadata.get('level', ''),
+                        'language': metadata.get('language', 'zh'),
                         'total_questions': metadata.get('total_questions', 0),
                         'total_time_minutes': metadata.get('total_time_minutes', 0),
                         'total_score': metadata.get('total_score', 0),

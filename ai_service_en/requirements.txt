@@ -1,6 +1,12 @@
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
 pydantic
-faster-whisper
+transformers
 librosa
+safetensors
+num2words
+onnx
+onnxruntime
+numpy
+faster-whisper
