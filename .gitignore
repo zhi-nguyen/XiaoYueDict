@@ -1,0 +1,12 @@
+# Ignore patterns for clean frontend branch
+frontend_nextjs/node_modules/
+frontend_nextjs/.next/
+frontend_nextjs/out/
+frontend_nextjs/build/
+frontend_nextjs/*.tsbuildinfo
+frontend_nextjs/npm-debug.log*
+frontend_nextjs/yarn-debug.log*
+frontend_nextjs/yarn-error.log*
+frontend_nextjs/.env*.local
+frontend_nextjs/.git_backup/
+
