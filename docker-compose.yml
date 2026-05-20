@@ -34,7 +34,7 @@ services:
   redis:
     image: redis:alpine
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -57,7 +57,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U xiaoyue"]
+      test: [ "CMD-SHELL", "pg_isready -U xiaoyue" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -120,6 +120,7 @@ services:
       - AI_SERVICE_ZH_URL=http://ai-service-zh:8001/api/v1/score
     volumes:
       - ./core_django:/app
+      - django_media:/app/media
     deploy:
       resources:
         limits:
@@ -139,7 +140,7 @@ services:
     volumes:
       - ./ai_service_zh/models_cache:/app/models_cache
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -161,9 +162,16 @@ services:
     build:
       context: ./ai_service_en
     volumes:
-      - ./ai_service_en/models_cache:/app/models_cache
+      - ./ai_service_en/model:/app/model
+    environment:
+      - ONNX_MODEL_PATH=/app/model/pronunciation_scorer_int8.onnx
+      - WHISPER_MODEL_SIZE=base.en
+      - WHISPER_CACHE_DIR=/app/model/whisper_cache
+      - ORT_INTRA_OP_THREADS=4
+      - ORT_INTER_OP_THREADS=1
+      - OMP_NUM_THREADS=4
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
       interval: 30s
       timeout: 10s
       retries: 3

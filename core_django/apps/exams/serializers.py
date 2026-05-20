@@ -38,7 +38,7 @@ class ExamSerializer(serializers.ModelSerializer):
     class Meta:
         model = Exam
         fields = [
-            'id', 'exam_id', 'exam_name', 'exam_version', 'level',
+            'id', 'exam_id', 'exam_name', 'exam_version', 'level', 'language',
             'total_questions', 'total_time_minutes', 'total_score', 'passing_score',
             'allow_resume', 'max_attempts', 'shuffle_questions', 'shuffle_options',
             'show_explanation_after', 'status', 'created_at', 'sections'
@@ -48,7 +48,7 @@ class ExamListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Exam
         fields = [
-            'id', 'exam_id', 'exam_name', 'exam_version', 'level',
+            'id', 'exam_id', 'exam_name', 'exam_version', 'level', 'language',
             'total_questions', 'total_time_minutes', 'total_score', 'passing_score',
             'status', 'created_at'
         ]

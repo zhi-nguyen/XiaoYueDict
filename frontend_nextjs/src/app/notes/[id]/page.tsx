@@ -209,7 +209,7 @@ export default function NotebookDetailPage() {
                 <div key={word.id} className="bg-white border border-outline rounded-2xl p-5 hover:border-primary/50 transition-colors group relative">
                   <button 
                     onClick={() => handleDeleteWord(word.id)}
-                    className="absolute top-4 right-4 text-secondary hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="absolute top-4 right-4 text-secondary hover:text-red-500 opacity-70 md:opacity-0 group-hover:opacity-100 transition-opacity"
                     title="Xóa từ"
                   >
                     <span className="material-symbols-outlined text-xl">delete</span>

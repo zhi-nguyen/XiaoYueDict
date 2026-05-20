@@ -1,12 +1,14 @@
 """
-English AI Pronunciation Service — FastAPI Application.
+English AI Pronunciation Service — FastAPI entry point.
 
-Uses Faster-Whisper (Large-v3, CTranslate2 INT8) for:
-- Read-Aloud scoring (word-level confidence against target text)
-- Free Decoding (ASR transcription + fluency score)
+Serves the Wav2Vec2-based PronunciationScorer (ONNX INT8) via a REST API
+that mirrors the ai_service_zh contract.
 
-All inference runs on CPU with INT8 quantization.
+Endpoints:
+  GET  /health        → Health check for Docker orchestration
+  POST /api/v1/score  → Dual-routing pronunciation scoring
 """
+
 import os
 import time
 import tempfile
@@ -19,32 +21,30 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPExcept
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 
-from inference_pipeline import PronunciationScorer
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
 logger = logging.getLogger(__name__)
 
-# Global scorer instance — loaded once at startup
+from inference_pipeline import EnglishPronunciationScorer
+
+# Global scorer instance — initialised once at startup
 scorer = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Lifespan event: Load the Faster-Whisper model exactly ONCE at startup.
-    The model is heavy (~1-3GB in RAM), so we avoid reloading per-request.
-    """
+    """Load the ONNX INT8 model exactly ONCE when the server starts."""
     global scorer
-    logger.info("🚀 Starting English AI Pronunciation Service...")
+    logger.info("🚀 Starting English AI Service (ONNX INT8)...")
 
-    start = time.time()
     try:
-        scorer = PronunciationScorer()
-        elapsed = time.time() - start
-        logger.info(f"✅ PronunciationScorer initialized in {elapsed:.1f}s")
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize PronunciationScorer: {e}")
-        raise e
+        scorer = EnglishPronunciationScorer()
+        logger.info("✅ EnglishPronunciationScorer globally initialized.")
+    except Exception as exc:
+        logger.error(f"❌ Failed to initialize scorer: {exc}")
+        raise exc
 
     yield
 
@@ -52,11 +52,14 @@ async def lifespan(app: FastAPI):
     scorer = None
 
 
-# ── FastAPI Application ──
+# ── FastAPI Application ──────────────────────────────────────
 app = FastAPI(
     title="English AI Pronunciation Service",
-    description="Faster-Whisper Large-v3 (INT8 CPU) — Word-level pronunciation scoring",
-    version="2.0.0",
+    description=(
+        "Microservice for English pronunciation scoring "
+        "using Wav2Vec2 + ONNX INT8 quantization."
+    ),
+    version="1.0.0",
     lifespan=lifespan,
 )
 
@@ -69,22 +72,26 @@ app.add_middleware(
 )
 
 
+# ── Helpers ──────────────────────────────────────────────────
 def cleanup_temp_file(file_path: str):
-    """Background task to delete temporary audio files."""
+    """Background task to remove temporary audio files after response."""
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
-    except Exception as e:
-        logger.warning(f"Failed to delete temp file {file_path}: {e}")
+            logger.debug(f"🗑️ Deleted temp file: {file_path}")
+    except Exception as exc:
+        logger.warning(f"⚠️ Failed to delete {file_path}: {exc}")
 
 
+# ── Endpoints ────────────────────────────────────────────────
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Docker orchestration."""
     return {
         "status": "healthy",
         "service": "ai_service_en",
-        "model_loaded": scorer is not None,
+        "model_loaded": scorer is not None and scorer.model_loaded,
+        "runtime": "onnx_int8",
     }
 
 
@@ -95,68 +102,64 @@ async def score_endpoint(
     target_text: str = Form(None),
 ):
     """
-    Dual-Routing Endpoint:
-    - Branch A: target_text provided → Read-Aloud (word-level scoring)
-    - Branch B: target_text omitted  → Free Decoding (ASR + fluency)
+    Dual-Routing Endpoint (mirrors ai_service_zh API contract):
+      - Branch A: target_text provided → Read-Aloud scoring (word-level)
+      - Branch B: target_text omitted  → Free Decoding (fluency)
     """
     if not audio_file.filename:
         raise HTTPException(status_code=400, detail="Audio file is required.")
 
-    # Save uploaded file to temp location
+    # Persist upload to temp file
     temp_dir = tempfile.gettempdir()
-    file_ext = os.path.splitext(audio_file.filename)[1] or ".wav"
-    temp_file_path = os.path.join(temp_dir, f"audio_en_{uuid.uuid4().hex}{file_ext}")
+    ext = os.path.splitext(audio_file.filename)[1] or ".wav"
+    temp_path = os.path.join(temp_dir, f"audio_en_{uuid.uuid4().hex}{ext}")
 
     try:
-        with open(temp_file_path, "wb") as f:
+        with open(temp_path, "wb") as f:
             content = await audio_file.read()
             f.write(content)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save audio file: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save audio file: {str(exc)}",
+        )
 
-    background_tasks.add_task(cleanup_temp_file, temp_file_path)
+    background_tasks.add_task(cleanup_temp_file, temp_path)
 
-    request_start = time.time()
-
-    # ── BRANCH A: Read-Aloud ──
+    # ── Branch A: Read-Aloud ──
     if target_text and target_text.strip():
-        logger.info(f"🔄 Read-Aloud mode. Target: '{target_text[:80]}...'")
+        logger.info(f"🔄 [EN] Read-Aloud mode. Target: '{target_text}'")
         try:
-            result = await run_in_threadpool(scorer.score_audio, temp_file_path, target_text)
-
+            result = await run_in_threadpool(
+                scorer.score_audio, temp_path, target_text
+            )
             if "error" in result:
                 raise HTTPException(status_code=400, detail=result["error"])
-
-            elapsed = time.time() - request_start
-            logger.info(f"✅ Read-Aloud completed in {elapsed:.2f}s — Score: {result.get('overall_score')}")
             return result
-
         except HTTPException:
             raise
-        except Exception as e:
-            logger.error(f"❌ Read-Aloud failed:\n{traceback.format_exc()}")
-            raise HTTPException(status_code=500, detail=f"ML Error: {str(e)}")
+        except Exception as exc:
+            logger.error(f"❌ [EN] Read-Aloud failed:\n{traceback.format_exc()}")
+            raise HTTPException(status_code=500, detail=f"ML Error: {str(exc)}")
 
-    # ── BRANCH B: Free Decoding ──
+    # ── Branch B: Free Decoding ──
     else:
-        logger.info("🔄 Free Decoding mode")
+        logger.info("🔄 [EN] Free Decoding mode")
         try:
-            result = await run_in_threadpool(scorer.decode_and_score, temp_file_path)
-
+            result = await run_in_threadpool(
+                scorer.decode_and_score, temp_path
+            )
             if "error" in result:
                 raise HTTPException(status_code=400, detail=result["error"])
-
-            elapsed = time.time() - request_start
-            logger.info(f"✅ Free Decoding completed in {elapsed:.2f}s — Fluency: {result.get('fluency_score')}")
             return result
-
         except HTTPException:
             raise
-        except Exception as e:
-            logger.error(f"❌ Free Decoding failed:\n{traceback.format_exc()}")
-            raise HTTPException(status_code=500, detail=f"ML Error: {str(e)}")
+        except Exception as exc:
+            logger.error(f"❌ [EN] Free Decoding failed:\n{traceback.format_exc()}")
+            raise HTTPException(status_code=500, detail=f"ML Error: {str(exc)}")
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

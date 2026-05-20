@@ -27,7 +27,7 @@ env/
 # English service (Faster-Whisper)
 ai_service_en/models_cache/
 ai_service_en/models_weights/
-
+ai_service_en_v2/
 # Chinese service (FunASR)
 ai_service_zh/models_cache/
 ai_service_zh/models_weights/
@@ -95,3 +95,4 @@ coverage/
 .nyc_output/
 /ai_service_zh/scripts
 /ai_service_en/scripts
+/ai_service_en/model/whisper_cache
