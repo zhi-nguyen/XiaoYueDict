@@ -64,13 +64,30 @@ class ChinesePronunciationScorer:
             os.environ["MODELSCOPE_CACHE"] = cache_dir
             logger.info(f"  MODELSCOPE_CACHE={cache_dir}")
 
-            self.model = AutoModel(
-                model=model_name,
-                vad_model=DEFAULT_VAD_MODEL,
-                device="cpu",
-                hub="ms",
-                disable_update=True,
-            )
+            import torch
+            self._torch = torch
+            cuda_available = torch.cuda.is_available()
+            self._use_cuda = cuda_available
+            
+            if cuda_available:
+                logger.info("CUDA is available. Initializing FunASR model on GPU (AMP FP16).")
+                self.model = AutoModel(
+                    model=model_name,
+                    vad_model=DEFAULT_VAD_MODEL,
+                    device="cuda",
+                    fp16=False,
+                    hub="ms",
+                    disable_update=True,
+                )
+            else:
+                logger.info("CUDA not available. Initializing FunASR model on CPU.")
+                self.model = AutoModel(
+                    model=model_name,
+                    vad_model=DEFAULT_VAD_MODEL,
+                    device="cpu",
+                    hub="ms",
+                    disable_update=True,
+                )
 
             load_time = time.time() - start_time
             logger.info(f"✅ FunASR model loaded in {load_time:.1f}s")
@@ -107,7 +124,7 @@ class ChinesePronunciationScorer:
         try:
             results = self.model.generate(
                 input=audio_path,
-                batch_size_s=300,
+                batch_size_s=60,
             )
         except Exception as e:
             logger.error(f"❌ FunASR generate failed: {e}")
