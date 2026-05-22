@@ -29,6 +29,15 @@ logger = logging.getLogger(__name__)
 # CPU thread settings — sync with docker-compose ORT_INTRA_OP_THREADS
 os.environ.setdefault("OMP_NUM_THREADS", os.environ.get("ORT_INTRA_OP_THREADS", "4"))
 
+# CUDA memory guard — limit to 25% of GPU for EN service (~1 GB / 4 GB)
+try:
+    import torch as _torch
+    if _torch.cuda.is_available():
+        _torch.cuda.set_per_process_memory_fraction(0.25, 0)
+        logger.info("🔒 CUDA memory fraction set to 25% (~1 GB / 4 GB)")
+except Exception:
+    pass  # torch may not be installed or no CUDA
+
 # Default paths
 DEFAULT_ONNX_MODEL = os.environ.get(
     "ONNX_MODEL_PATH",
@@ -282,20 +291,28 @@ class EnglishPronunciationScorer:
           3. Align transcribed words with target text
         """
         if not self.model_loaded:
-            return {"error": f"Model not loaded: {self._init_error}"}
+            return {"error": f"Model not loaded: {self._init_error}", "error_code": "model_error"}
         if not target_text or not target_text.strip():
-            return {"error": "Target text cannot be empty."}
+            return {"error": "Target text cannot be empty.", "error_code": "bad_input"}
         if not os.path.exists(audio_path):
-            return {"error": f"Audio file not found: {audio_path}"}
+            return {"error": f"Audio file not found: {audio_path}", "error_code": "bad_input"}
 
         start = time.time()
 
         # Step 1: INT8 scorer
         try:
             raw_score = self._predict_score(audio_path)
+        except RuntimeError as exc:
+            if "out of memory" in str(exc).lower():
+                logger.error(f"🚨 VRAM OOM during EN scoring: {exc}")
+                return {
+                    "error": "Server is overloaded. Please try again shortly.",
+                    "error_code": "oom_error",
+                }
+            raise
         except Exception as exc:
             logger.error(f"❌ Scorer inference failed: {exc}")
-            return {"error": f"Inference failed: {str(exc)}"}
+            return {"error": f"Inference failed: {str(exc)}", "error_code": "model_error"}
 
         model_score = self._sigmoid_to_percentage(raw_score)
 
@@ -336,18 +353,26 @@ class EnglishPronunciationScorer:
           2. ONNX INT8 scorer → fluency/quality score
         """
         if not self.model_loaded:
-            return {"error": f"Model not loaded: {self._init_error}"}
+            return {"error": f"Model not loaded: {self._init_error}", "error_code": "model_error"}
         if not os.path.exists(audio_path):
-            return {"error": f"Audio file not found: {audio_path}"}
+            return {"error": f"Audio file not found: {audio_path}", "error_code": "bad_input"}
 
         start = time.time()
 
         # Step 1: INT8 scorer for overall quality
         try:
             raw_score = self._predict_score(audio_path)
+        except RuntimeError as exc:
+            if "out of memory" in str(exc).lower():
+                logger.error(f"🚨 VRAM OOM during EN free decode: {exc}")
+                return {
+                    "error": "Server is overloaded. Please try again shortly.",
+                    "error_code": "oom_error",
+                }
+            raise
         except Exception as exc:
             logger.error(f"❌ Scorer inference failed: {exc}")
-            return {"error": f"Inference failed: {str(exc)}"}
+            return {"error": f"Inference failed: {str(exc)}", "error_code": "model_error"}
 
         model_score = self._sigmoid_to_percentage(raw_score)
 

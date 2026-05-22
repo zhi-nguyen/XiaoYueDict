@@ -81,3 +81,36 @@ class AssessmentStatusView(APIView):
 
         serializer = AssessmentTaskSerializer(task)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class SpellCheckView(APIView):
+    """
+    POST /api/v1/assessments/spellcheck/
+    Accepts {"text": "some English text"} and returns misspelled words
+    with suggestions. Used by the frontend to validate text BEFORE
+    submitting for pronunciation scoring.
+
+    Response:
+        {
+            "is_valid": true/false,
+            "misspelled": [
+                {"word": "helo", "index": 0, "suggestions": ["hello", "help"]},
+            ],
+            "clean_text": "original text"
+        }
+    """
+
+    def post(self, request, *args, **kwargs):
+        text = request.data.get('text', '')
+
+        if not text or not text.strip():
+            return Response(
+                {'error': 'No text provided.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from .spellcheck import check_english_text
+        result = check_english_text(text)
+
+        return Response(result, status=status.HTTP_200_OK)
+

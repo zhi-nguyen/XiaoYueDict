@@ -155,7 +155,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [ gpu ]
-    restart: unless-stopped
+    restart: always
     networks:
       - xiaoyue-network
 
@@ -191,7 +191,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [ gpu ]
-    restart: unless-stopped
+    restart: always
     networks:
       - xiaoyue-network
 

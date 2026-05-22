@@ -147,8 +147,30 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
                 timeout=30,  # 30s timeout for 5-10s processing budget + network
             )
 
-            response.raise_for_status()
-            score_data = response.json()
+        # ── Handle AI service errors by status code ──
+        if response.status_code == 503:
+            # Server overloaded (OOM / model busy) → retry
+            error_detail = response.json().get('detail', 'AI service overloaded')
+            logger.warning(f"⚠️ AI service ({language}) returned 503: {error_detail}")
+            task.status = 'PENDING'
+            task.error_message = error_detail
+            task.save(update_fields=['status', 'error_message'])
+            raise self.retry(
+                exc=Exception(error_detail),
+                countdown=10,  # wait 10s before retry
+            )
+
+        if response.status_code == 400:
+            # Client-side issue (no speech, bad input) → fail with user message
+            error_detail = response.json().get('detail', 'Invalid audio input')
+            logger.warning(f"⚠️ AI service ({language}) returned 400: {error_detail}")
+            task.status = 'FAILED'
+            task.error_message = error_detail
+            task.save(update_fields=['status', 'error_message'])
+            return {"error": error_detail}
+
+        response.raise_for_status()
+        score_data = response.json()
 
         # ── Step 3: Store result ──
         task.result_data = score_data
