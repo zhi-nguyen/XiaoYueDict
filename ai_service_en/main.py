@@ -146,7 +146,9 @@ async def score_endpoint(
                 scorer.score_audio, temp_path, target_text
             )
             if "error" in result:
-                raise HTTPException(status_code=400, detail=result["error"])
+                code = result.get("error_code", "")
+                http_code = 503 if code in ("oom_error", "model_error") else 400
+                raise HTTPException(status_code=http_code, detail=result["error"])
             return result
         except HTTPException:
             raise
@@ -162,7 +164,9 @@ async def score_endpoint(
                 scorer.decode_and_score, temp_path
             )
             if "error" in result:
-                raise HTTPException(status_code=400, detail=result["error"])
+                code = result.get("error_code", "")
+                http_code = 503 if code in ("oom_error", "model_error") else 400
+                raise HTTPException(status_code=http_code, detail=result["error"])
             return result
         except HTTPException:
             raise
