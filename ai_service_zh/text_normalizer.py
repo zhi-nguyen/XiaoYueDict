@@ -38,6 +38,36 @@ def normalize_chinese_text(text: str) -> str:
     return text
 
 
+def clean_text_for_scoring(text: str, lang: str = 'zh') -> str:
+    """
+    The "Vacuum Cleaner" — strips EVERYTHING except scorable characters.
+
+    By the time text reaches this function, the Next.js frontend has already
+    validated that input contains only letters/Chinese characters and punctuation
+    (no numbers, no math symbols). This function does the final cleanup:
+    removes all punctuation so only pronunciation-relevant characters remain.
+
+    Args:
+        text: Input text (already validated by frontend).
+        lang: Language code — 'zh' for Chinese, 'en' for English.
+
+    Returns:
+        Clean text with only scorable characters:
+        - Chinese: only Chinese characters (U+4E00–U+9FA5)
+        - English: only letters and single quotes (for contractions like "don't")
+    """
+    if not text or not text.strip():
+        return ""
+
+    if lang == 'zh':
+        # Remove EVERYTHING that IS NOT a Chinese character
+        return re.sub(r'[^\u4e00-\u9fa5]', '', text)
+    else:
+        # Remove EVERYTHING that IS NOT an English letter or a single quote
+        # Keep the single quote (') because "don't" counts as a single pronounced word
+        return re.sub(r"[^a-zA-Z']", '', text)
+
+
 def get_pinyin_for_text(text: str) -> list:
     """
     Get pinyin for Chinese text. Returns list of (char, pinyin) tuples.

@@ -19,13 +19,16 @@ import json
 import time
 import logging
 import numpy as np
+import torch
 
 # CPU thread optimization
 os.environ.setdefault('OMP_NUM_THREADS', '2')
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
-
+if torch.cuda.is_available():
+    torch.cuda.set_per_process_memory_fraction(0.8, 0)
+    logger.info("🔒 CUDA memory fraction set to 80% (~3.2 GB / 4 GB)")
 # Default model — Paraformer-zh is the best open-source Chinese ASR model
 DEFAULT_MODEL = os.environ.get("FUNASR_MODEL", "paraformer-zh")
 DEFAULT_VAD_MODEL = os.environ.get("FUNASR_VAD_MODEL", "fsmn-vad")
@@ -109,6 +112,7 @@ class ChinesePronunciationScorer:
         Read-Aloud mode: Compare spoken audio against target Chinese text.
         Returns character-level scores with pinyin and tone information.
         """
+        
         if not self.model_loaded:
             return {"error": f"Chinese ASR model not loaded: {self._init_error}"}
 
@@ -126,15 +130,30 @@ class ChinesePronunciationScorer:
                 input=audio_path,
                 batch_size_s=60,
             )
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+            if "out of memory" in str(e).lower():
+                logger.error(f"🚨 VRAM OOM during transcription: {e}")
+                torch.cuda.empty_cache()
+                return {
+                    "error": "Server is overloaded. Please try again shortly.",
+                    "error_code": "oom_error",
+                }
+            raise
         except Exception as e:
             logger.error(f"❌ FunASR generate failed: {e}")
-            return {"error": f"ASR transcription failed: {str(e)}"}
+            return {
+                "error": "AI transcription failed.",
+                "error_code": "model_error",
+            }
 
         elapsed = time.time() - start_time
         logger.info(f"⏱️ Transcription completed in {elapsed:.2f}s")
 
         if not results or not results[0].get("text"):
-            return {"error": "No speech detected in audio."}
+            return {
+                "error": "No speech detected in audio.",
+                "error_code": "no_speech",
+            }
 
         recognized_text = results[0]["text"]
         timestamp_data = results[0].get("timestamp", [])
@@ -186,11 +205,23 @@ class ChinesePronunciationScorer:
         try:
             results = self.model.generate(
                 input=audio_path,
-                batch_size_s=300,
+                batch_size_s=60,
             )
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+            if "out of memory" in str(e).lower():
+                logger.error(f"🚨 VRAM OOM during free decoding: {e}")
+                torch.cuda.empty_cache()
+                return {
+                    "error": "Server is overloaded. Please try again shortly.",
+                    "error_code": "oom_error",
+                }
+            raise
         except Exception as e:
             logger.error(f"❌ FunASR generate failed: {e}")
-            return {"error": f"ASR transcription failed: {str(e)}"}
+            return {
+                "error": f"ASR transcription failed: {str(e)}",
+                "error_code": "model_error",
+            }
 
         elapsed = time.time() - start_time
         logger.info(f"⏱️ Free decoding completed in {elapsed:.2f}s")
@@ -250,10 +281,10 @@ class ChinesePronunciationScorer:
         Compare recognized text with target text character by character.
         Uses timestamps from FunASR when available.
         """
-        from text_normalizer import normalize_chinese_text
+        from text_normalizer import clean_text_for_scoring
 
-        recognized_chars = list(normalize_chinese_text(recognized_text).replace(' ', ''))
-        target_chars = list(normalize_chinese_text(target_text).replace(' ', ''))
+        recognized_chars = list(clean_text_for_scoring(recognized_text, 'zh'))
+        target_chars = list(clean_text_for_scoring(target_text, 'zh'))
 
         if not target_chars:
             return [], 0.0
