@@ -87,11 +87,23 @@ def cleanup_temp_file(file_path: str):
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Docker orchestration."""
+    import torch
+    
+    cuda_active = False
+    if scorer is not None and scorer.model_loaded and scorer.session is not None:
+        active_providers = scorer.session.get_providers()
+        cuda_active = "CUDAExecutionProvider" in active_providers or (
+            hasattr(scorer, "whisper_model") 
+            and scorer.whisper_model is not None 
+            and getattr(scorer.whisper_model, "device", "") == "cuda"
+        )
+
     return {
         "status": "healthy",
         "service": "ai_service_en",
         "model_loaded": scorer is not None and scorer.model_loaded,
-        "runtime": "onnx_int8",
+        "runtime": "onnx_fp16" if cuda_active else "onnx_int8",
+        "device": "cuda" if cuda_active else "cpu",
     }
 
 

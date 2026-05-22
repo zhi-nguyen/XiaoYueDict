@@ -69,10 +69,15 @@ def cleanup_temp_file(file_path: str):
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Docker orchestration."""
+    cuda_active = False
+    if scorer is not None and scorer.model_loaded and scorer.model is not None:
+        cuda_active = getattr(scorer.model, "device", "") == "cuda"
+
     return {
         "status": "healthy",
         "service": "ai_service_zh",
         "model_loaded": scorer is not None and scorer.model_loaded,
+        "device": "cuda" if cuda_active else "cpu",
     }
 
 

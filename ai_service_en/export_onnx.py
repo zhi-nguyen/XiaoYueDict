@@ -127,6 +127,7 @@ def main():
 
     onnx_path = os.path.join(args.output_dir, "pronunciation_scorer.onnx")
     quantized_onnx_path = os.path.join(args.output_dir, "pronunciation_scorer_int8.onnx")
+    fp16_onnx_path = os.path.join(args.output_dir, "pronunciation_scorer_fp16.onnx")
 
     # =========================================================================
     # Step 1: Load PyTorch model with trained weights (safetensors format)
@@ -209,28 +210,65 @@ def main():
     print(f"   📉 Size reduction: {reduction:.1f}%")
 
     # =========================================================================
+    # Step 4b: Convert to FP16
+    # =========================================================================
+    print("4b. Converting ONNX model to FP16...")
+    try:
+        from onnxconverter_common import float16
+        import onnx
+        
+        onnx_model_fp32 = onnx.load(onnx_path)
+        onnx_model_fp16 = float16.convert_float_to_float16(
+            onnx_model_fp32,
+            keep_io_types=True,
+            # Cast nodes must stay in original precision — converting them
+            # breaks the type chain (outputs float16 where float32 is expected)
+            op_block_list=['Cast', 'LayerNormalization'],
+        )
+        onnx.save(onnx_model_fp16, fp16_onnx_path)
+        
+        fp16_size_mb = os.path.getsize(fp16_onnx_path) / (1024 ** 2)
+        print(f"   ✅ Saved FP16 model: {fp16_onnx_path} ({fp16_size_mb:.1f} MB)")
+    except Exception as exc:
+        print(f"   ❌ FP16 conversion failed: {exc}")
+
+    # =========================================================================
     # Step 5: Verify ONNX Runtime inference
     # =========================================================================
     print("5. Verifying ONNX Runtime inference...")
     import onnxruntime as ort
     import numpy as np
 
-    sess_options = ort.SessionOptions()
-    sess_options.intra_op_num_threads = 2
+    # Test INT8 on CPU
+    try:
+        sess_options = ort.SessionOptions()
+        sess_options.intra_op_num_threads = 2
+        session_int8 = ort.InferenceSession(
+            quantized_onnx_path,
+            sess_options=sess_options,
+            providers=["CPUExecutionProvider"],
+        )
+        test_input = np.random.randn(1, 16000).astype(np.float32)
+        inputs = {session_int8.get_inputs()[0].name: test_input}
+        result = session_int8.run(None, inputs)
+        print(f"   ✅ INT8 CPU inference OK. Dummy prediction: {float(result[0][0][0]):.4f}")
+    except Exception as exc:
+        print(f"   ❌ INT8 CPU verification failed: {exc}")
 
-    session = ort.InferenceSession(
-        quantized_onnx_path,
-        sess_options=sess_options,
-        providers=["CPUExecutionProvider"],
-    )
-
-    # Test with dummy audio
-    test_input = np.random.randn(1, 16000).astype(np.float32)
-    inputs = {session.get_inputs()[0].name: test_input}
-    result = session.run(None, inputs)
-
-    predicted_score = float(result[0][0][0])
-    print(f"   ✅ ONNX Runtime inference OK. Dummy prediction: {predicted_score:.4f}")
+    # Test FP16
+    try:
+        available_providers = ort.get_available_providers()
+        provs = ["CUDAExecutionProvider", "CPUExecutionProvider"] if "CUDAExecutionProvider" in available_providers else ["CPUExecutionProvider"]
+        session_fp16 = ort.InferenceSession(
+            fp16_onnx_path,
+            providers=provs
+        )
+        test_input = np.random.randn(1, 16000).astype(np.float32)
+        inputs = {session_fp16.get_inputs()[0].name: test_input}
+        result = session_fp16.run(None, inputs)
+        print(f"   ✅ FP16 inference OK ({provs[0]}). Dummy prediction: {float(result[0][0][0]):.4f}")
+    except Exception as exc:
+        print(f"   ❌ FP16 verification failed: {exc}")
 
     # =========================================================================
     # Summary
@@ -240,12 +278,14 @@ def main():
     print("=" * 60)
     print(f"  Original   : {args.weights} ({os.path.getsize(args.weights) / (1024**2):.1f} MB)")
     print(f"  FP32 ONNX  : {onnx_path} ({onnx_size_mb:.1f} MB)")
-    print(f"  INT8 ONNX  : {quantized_onnx_path} ({quantized_size_mb:.1f} MB)")
-    print(f"  Compression: {reduction:.1f}% smaller than FP32 ONNX")
+    if os.path.exists(quantized_onnx_path):
+        print(f"  INT8 ONNX  : {quantized_onnx_path} ({os.path.getsize(quantized_onnx_path) / (1024**2):.1f} MB)")
+    if os.path.exists(fp16_onnx_path):
+        print(f"  FP16 ONNX  : {fp16_onnx_path} ({os.path.getsize(fp16_onnx_path) / (1024**2):.1f} MB)")
     print("=" * 60)
     print("\nTo use in production:")
     print("  import onnxruntime as ort")
-    print(f'  session = ort.InferenceSession("{quantized_onnx_path}")')
+    print(f'  session = ort.InferenceSession("{fp16_onnx_path}")')
     print('  result = session.run(None, {"input_values": audio_array})')
 
 
