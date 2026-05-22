@@ -97,3 +97,5 @@ coverage/
 /ai_service_en/scripts
 /ai_service_en/model/whisper_cache
 /frontend_nextjs
+.cursorrules
+.clauderules

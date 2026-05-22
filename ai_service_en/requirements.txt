@@ -7,6 +7,7 @@ librosa
 safetensors
 num2words
 onnx
-onnxruntime
+onnxruntime-gpu
 numpy
 faster-whisper
+onnxconverter-common
