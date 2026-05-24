@@ -8,6 +8,7 @@ urlpatterns = [
     path('api/v1/assessments/', include('apps.assessments.urls')),
     path('api/v1/notes/', include('apps.notes.urls')),
     path('api/v1/exams/', include('apps.exams.urls')),
+    path('api/v1/dictionary/zh/', include('apps.dictionary_zh.urls')),
 ]
 
 if settings.DEBUG:
