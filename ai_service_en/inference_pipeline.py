@@ -29,6 +29,15 @@ logger = logging.getLogger(__name__)
 # CPU thread settings — sync with docker-compose ORT_INTRA_OP_THREADS
 os.environ.setdefault("OMP_NUM_THREADS", os.environ.get("ORT_INTRA_OP_THREADS", "4"))
 
+# CUDA memory guard — limit to 25% of GPU for EN service (~1 GB / 4 GB)
+try:
+    import torch as _torch
+    if _torch.cuda.is_available():
+        _torch.cuda.set_per_process_memory_fraction(0.25, 0)
+        logger.info("🔒 CUDA memory fraction set to 25% (~1 GB / 4 GB)")
+except Exception:
+    pass  # torch may not be installed or no CUDA
+
 # Default paths
 DEFAULT_ONNX_MODEL = os.environ.get(
     "ONNX_MODEL_PATH",
@@ -50,25 +59,62 @@ class EnglishPronunciationScorer:
     """
 
     def __init__(self, model_path: str = None):
-        """Load both the ONNX INT8 scorer and Faster-Whisper ASR."""
+        """Load both the ONNX scorer and Faster-Whisper ASR."""
         import onnxruntime as ort
         from faster_whisper import WhisperModel
+        import torch
+
+        # Check CUDA availability
+        available_providers = ort.get_available_providers()
+        logger.info(f"Available ONNX Runtime providers: {available_providers}")
+        cuda_available = "CUDAExecutionProvider" in available_providers and torch.cuda.is_available()
+
+        if cuda_available:
+            logger.info("CUDA is available. Configuring for GPU execution.")
+            default_model = os.path.join(
+                os.path.dirname(__file__), "model", "pronunciation_scorer.onnx"
+            )
+            providers = [
+                (
+                    "CUDAExecutionProvider",
+                    {
+                        "device_id": 0,
+                        "gpu_mem_limit": 1024 * 1024 * 1024,  # limit to 1GB VRAM arena
+                    },
+                ),
+                "CPUExecutionProvider",
+            ]
+        else:
+            logger.info("CUDA not available. Configuring for CPU INT8 execution.")
+            default_model = os.path.join(
+                os.path.dirname(__file__), "model", "pronunciation_scorer_int8.onnx"
+            )
+            providers = ["CPUExecutionProvider"]
 
         if model_path is None:
-            model_path = DEFAULT_ONNX_MODEL
+            model_path = os.environ.get("ONNX_MODEL_PATH", default_model)
 
         self.floor_score = 15.0
         self._init_error = None
         self.session = None
         self.whisper_model = None
 
-        # ── Load ONNX INT8 Scorer ──
-        logger.info(f"Loading ONNX INT8 scorer: {model_path}")
+        # ── Load ONNX Scorer ──
+        logger.info(f"Loading ONNX scorer: {model_path} with providers: {providers}")
         start = time.time()
 
         try:
             if not os.path.exists(model_path):
-                raise FileNotFoundError(f"Model file not found: {model_path}")
+                # Fall back to CPU INT8 model if FP16 doesn't exist
+                alt_model = os.path.join(
+                    os.path.dirname(__file__), "model", "pronunciation_scorer_int8.onnx"
+                )
+                if os.path.exists(alt_model) and model_path != alt_model:
+                    logger.warning(f"Model path {model_path} not found. Falling back to {alt_model}")
+                    model_path = alt_model
+                    providers = ["CPUExecutionProvider"]
+                else:
+                    raise FileNotFoundError(f"Model file not found: {model_path}")
 
             sess_opts = ort.SessionOptions()
             sess_opts.intra_op_num_threads = int(
@@ -81,16 +127,53 @@ class EnglishPronunciationScorer:
                 ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             )
 
-            self.session = ort.InferenceSession(
-                model_path,
-                sess_options=sess_opts,
-                providers=["CPUExecutionProvider"],
-            )
+            try:
+                self.session = ort.InferenceSession(
+                    model_path,
+                    sess_options=sess_opts,
+                    providers=providers,
+                )
+            except Exception as load_exc:
+                # FP16 ONNX model may have type mismatches with certain providers.
+                # Try falling back: first to FP32 on CUDA, then to INT8 on CPU.
+                logger.warning(
+                    f"⚠️ Failed to load {os.path.basename(model_path)}: {load_exc}"
+                )
+                fallback_models = [
+                    (
+                        os.path.join(os.path.dirname(__file__), "model", "pronunciation_scorer.onnx"),
+                        providers,  # keep original providers (CUDA + CPU)
+                        "FP32+CUDA",
+                    ),
+                    (
+                        os.path.join(os.path.dirname(__file__), "model", "pronunciation_scorer_int8.onnx"),
+                        ["CPUExecutionProvider"],
+                        "INT8+CPU",
+                    ),
+                ]
+                for fb_path, fb_providers, fb_label in fallback_models:
+                    if os.path.exists(fb_path) and fb_path != model_path:
+                        try:
+                            logger.info(f"  🔄 Trying fallback: {fb_label} ({os.path.basename(fb_path)})")
+                            self.session = ort.InferenceSession(
+                                fb_path,
+                                sess_options=sess_opts,
+                                providers=fb_providers,
+                            )
+                            model_path = fb_path
+                            logger.info(f"  ✅ Fallback succeeded: {fb_label}")
+                            break
+                        except Exception as fb_exc:
+                            logger.warning(f"  ❌ Fallback {fb_label} also failed: {fb_exc}")
+                            continue
+
+                if self.session is None:
+                    raise load_exc  # re-raise original if all fallbacks failed
 
             elapsed = time.time() - start
             model_size_mb = os.path.getsize(model_path) / (1024 ** 2)
             logger.info(
-                f"✅ ONNX INT8 scorer loaded in {elapsed:.2f}s "
+                f"✅ ONNX scorer loaded in {elapsed:.2f}s "
                 f"({model_size_mb:.1f} MB)"
             )
         except Exception as exc:
@@ -98,18 +181,27 @@ class EnglishPronunciationScorer:
             logger.error(f"❌ {self._init_error}")
 
         # ── Load Faster-Whisper ASR ──
-        logger.info(f"Loading Faster-Whisper model: {WHISPER_MODEL_SIZE}")
         start = time.time()
 
         try:
-            cpu_threads = int(os.environ.get("ORT_INTRA_OP_THREADS", "4"))
-            self.whisper_model = WhisperModel(
-                WHISPER_MODEL_SIZE,
-                device="cpu",
-                compute_type="int8",
-                cpu_threads=cpu_threads,
-                download_root=WHISPER_CACHE_DIR,
-            )
+            if cuda_available:
+                logger.info(f"Loading Faster-Whisper model {WHISPER_MODEL_SIZE} on CUDA (FP16)...")
+                self.whisper_model = WhisperModel(
+                    WHISPER_MODEL_SIZE,
+                    device="cuda",
+                    compute_type="float16",
+                    download_root=WHISPER_CACHE_DIR,
+                )
+            else:
+                logger.info(f"Loading Faster-Whisper model {WHISPER_MODEL_SIZE} on CPU (INT8)...")
+                cpu_threads = int(os.environ.get("ORT_INTRA_OP_THREADS", "4"))
+                self.whisper_model = WhisperModel(
+                    WHISPER_MODEL_SIZE,
+                    device="cpu",
+                    compute_type="int8",
+                    cpu_threads=cpu_threads,
+                    download_root=WHISPER_CACHE_DIR,
+                )
             elapsed = time.time() - start
             logger.info(f"✅ Faster-Whisper loaded in {elapsed:.2f}s")
         except Exception as exc:
@@ -199,20 +291,28 @@ class EnglishPronunciationScorer:
           3. Align transcribed words with target text
         """
         if not self.model_loaded:
-            return {"error": f"Model not loaded: {self._init_error}"}
+            return {"error": f"Model not loaded: {self._init_error}", "error_code": "model_error"}
         if not target_text or not target_text.strip():
-            return {"error": "Target text cannot be empty."}
+            return {"error": "Target text cannot be empty.", "error_code": "bad_input"}
         if not os.path.exists(audio_path):
-            return {"error": f"Audio file not found: {audio_path}"}
+            return {"error": f"Audio file not found: {audio_path}", "error_code": "bad_input"}
 
         start = time.time()
 
         # Step 1: INT8 scorer
         try:
             raw_score = self._predict_score(audio_path)
+        except RuntimeError as exc:
+            if "out of memory" in str(exc).lower():
+                logger.error(f"🚨 VRAM OOM during EN scoring: {exc}")
+                return {
+                    "error": "Server is overloaded. Please try again shortly.",
+                    "error_code": "oom_error",
+                }
+            raise
         except Exception as exc:
             logger.error(f"❌ Scorer inference failed: {exc}")
-            return {"error": f"Inference failed: {str(exc)}"}
+            return {"error": f"Inference failed: {str(exc)}", "error_code": "model_error"}
 
         model_score = self._sigmoid_to_percentage(raw_score)
 
@@ -253,18 +353,26 @@ class EnglishPronunciationScorer:
           2. ONNX INT8 scorer → fluency/quality score
         """
         if not self.model_loaded:
-            return {"error": f"Model not loaded: {self._init_error}"}
+            return {"error": f"Model not loaded: {self._init_error}", "error_code": "model_error"}
         if not os.path.exists(audio_path):
-            return {"error": f"Audio file not found: {audio_path}"}
+            return {"error": f"Audio file not found: {audio_path}", "error_code": "bad_input"}
 
         start = time.time()
 
         # Step 1: INT8 scorer for overall quality
         try:
             raw_score = self._predict_score(audio_path)
+        except RuntimeError as exc:
+            if "out of memory" in str(exc).lower():
+                logger.error(f"🚨 VRAM OOM during EN free decode: {exc}")
+                return {
+                    "error": "Server is overloaded. Please try again shortly.",
+                    "error_code": "oom_error",
+                }
+            raise
         except Exception as exc:
             logger.error(f"❌ Scorer inference failed: {exc}")
-            return {"error": f"Inference failed: {str(exc)}"}
+            return {"error": f"Inference failed: {str(exc)}", "error_code": "model_error"}
 
         model_score = self._sigmoid_to_percentage(raw_score)
 

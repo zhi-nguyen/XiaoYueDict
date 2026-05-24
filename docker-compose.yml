@@ -150,7 +150,12 @@ services:
         limits:
           cpus: "4.0"
           memory: 6G
-    restart: unless-stopped
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    restart: always
     networks:
       - xiaoyue-network
 
@@ -164,7 +169,7 @@ services:
     volumes:
       - ./ai_service_en/model:/app/model
     environment:
-      - ONNX_MODEL_PATH=/app/model/pronunciation_scorer_int8.onnx
+      - ONNX_MODEL_PATH=/app/model/pronunciation_scorer_fp16.onnx
       - WHISPER_MODEL_SIZE=base.en
       - WHISPER_CACHE_DIR=/app/model/whisper_cache
       - ORT_INTRA_OP_THREADS=4
@@ -180,8 +185,13 @@ services:
       resources:
         limits:
           cpus: "4.0"
-          memory: 16G
-    restart: unless-stopped
+          memory: 6G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    restart: always
     networks:
       - xiaoyue-network
 
@@ -191,7 +201,7 @@ volumes:
   django_static:
   django_media:
 
-# ── Networks ──
+    # ── Networks ──
 networks:
   xiaoyue-network:
     driver: bridge

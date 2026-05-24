@@ -69,10 +69,15 @@ def cleanup_temp_file(file_path: str):
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Docker orchestration."""
+    cuda_active = False
+    if scorer is not None and scorer.model_loaded and scorer.model is not None:
+        cuda_active = getattr(scorer.model, "device", "") == "cuda"
+
     return {
         "status": "healthy",
         "service": "ai_service_zh",
         "model_loaded": scorer is not None and scorer.model_loaded,
+        "device": "cuda" if cuda_active else "cpu",
     }
 
 
@@ -115,7 +120,9 @@ async def score_endpoint(
                 scorer.score_audio, temp_file_path, target_text
             )
             if "error" in result:
-                raise HTTPException(status_code=400, detail=result["error"])
+                code = result.get("error_code", "")
+                http_code = 503 if code in ("oom_error", "model_error") else 400
+                raise HTTPException(status_code=http_code, detail=result["error"])
             return result
 
         except HTTPException:
@@ -133,7 +140,9 @@ async def score_endpoint(
                 scorer.decode_and_score, temp_file_path
             )
             if "error" in result:
-                raise HTTPException(status_code=400, detail=result["error"])
+                code = result.get("error_code", "")
+                http_code = 503 if code in ("oom_error", "model_error") else 400
+                raise HTTPException(status_code=http_code, detail=result["error"])
             return result
 
         except HTTPException:
