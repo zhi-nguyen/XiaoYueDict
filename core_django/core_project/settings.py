@@ -22,6 +22,8 @@ INSTALLED_APPS = [
     'apps.assessments',
     'apps.exams',
     'apps.notes',
+    'apps.dictionary_zh',
+    'apps.dictionary_en',
 ]
 
 MIDDLEWARE = [

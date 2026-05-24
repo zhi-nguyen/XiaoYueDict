@@ -99,3 +99,9 @@ coverage/
 /frontend_nextjs
 .cursorrules
 .clauderules
+  
+# ── Temporary Test Scripts & Outputs ──  
+test*.py  
+output*.txt  
+core_django/test*.py  
+core_django/hsk_data/ 
