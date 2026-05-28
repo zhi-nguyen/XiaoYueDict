@@ -7,6 +7,7 @@ from django.db.models.functions import Length, StrIndex
 
 from .models import ZhWord, ZhExample
 from .serializers import ZhWordSerializer
+import re
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 20
@@ -24,16 +25,20 @@ class ZhWordSearchView(generics.ListAPIView):
         exact_example = None
         query_len = len(query)
         
-        # Chỉ quét ví dụ nếu độ dài hợp lý (từ 4 đến 50 ký tự)
-        if 4 <= query_len <= 50:
+        # Chỉ quét ví dụ nếu độ dài hợp lý (từ 2 đến 100 ký tự)
+        if 2 <= query_len <= 100:
             from .models import ZhExample
             
-            # 1. Thử tìm khớp chính xác hoàn toàn trước (Nhanh nhất nếu có Index B-Tree)
-            match = ZhExample.objects.filter(chinese=query).first()
+            # Làm sạch dấu câu ở cuối chuỗi truy vấn (nếu có)
+            cleaned_query = re.sub(r'[。，、！？. , ! ?]+$', '', query)
+            
+            # 1. Thử tìm khớp chính xác hoàn toàn trước (cho phép dấu câu tùy chọn ở cuối)
+            regex_pattern = r'^' + re.escape(cleaned_query) + r'[。，、！？. , ! ?]*$'
+            match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
             
             # 2. Nếu không khớp hoàn toàn, mới dùng contains (Quét chuỗi)
             if not match:
-                match = ZhExample.objects.filter(chinese__contains=query).first()
+                match = ZhExample.objects.filter(chinese__contains=cleaned_query).first()
                 
             if match:
                 exact_example = {
@@ -128,3 +133,59 @@ class ZhWordSearchView(generics.ListAPIView):
         queryset = queryset.order_by('match_level', '-reverse_sort_len', 'adjusted_rank', 'word_frequency')
         
         return queryset
+
+from rest_framework.views import APIView
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
+from rest_framework.response import Response
+from rest_framework import status
+import os
+from .tasks import translate_pure_text_task
+from celery.result import AsyncResult
+
+class PureTextTranslationView(APIView):
+    throttle_classes = [AnonRateThrottle, UserRateThrottle]
+
+    def post(self, request):
+        text_input = request.data.get("text", "").strip()
+        if not text_input:
+            return Response({'error': 'No text provided'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Đẩy vào Celery queue_core và lấy task_id ngay lập tức
+        task = translate_pure_text_task.apply_async(
+            args=[text_input], 
+            queue='queue_core'
+        )
+        
+        return Response({
+            "status": "PENDING",
+            "task_id": task.id
+        }, status=status.HTTP_202_ACCEPTED)
+
+class TranslationStatusView(APIView):
+    throttle_classes = []
+
+    def get(self, request, task_id):
+        res = AsyncResult(task_id)
+        
+        if res.state == 'SUCCESS':
+            result_data = res.result
+            if result_data.get('status') == 'SUCCESS':
+                return Response({
+                    "status": "SUCCESS",
+                    "translatedText": result_data.get('translatedText'),
+                    "source": result_data.get('source')
+                })
+            else:
+                return Response({
+                    "status": "FAILED", 
+                    "error": result_data.get('error', 'Lỗi không xác định')
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                
+        elif res.state == 'FAILURE':
+            return Response({
+                "status": "FAILED", 
+                "error": "Task execution failed"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+        # Nếu vẫn đang chạy hoặc nằm trong hàng đợi
+        return Response({"status": res.state})
