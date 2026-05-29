@@ -8,3 +8,5 @@ gunicorn
 psycopg2-binary
 dj-database-url
 pyspellchecker
+google-generativeai 
+google-cloud-aiplatform 

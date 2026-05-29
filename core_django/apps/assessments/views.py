@@ -41,11 +41,15 @@ class SubmitAssessmentView(APIView):
         )
 
         # Trigger Celery task — language determines which AI service to call
-        process_audio_task.delay(
-            str(task.id),
-            task.audio_file.path,
-            target_text,
-            language,
+        target_queue = 'queue_ai_zh' if language == 'zh' else 'queue_ai_en'
+        process_audio_task.apply_async(
+            args=[
+                str(task.id),
+                task.audio_file.path,
+                target_text,
+                language,
+            ],
+            queue=target_queue
         )
 
         # Return initial queue position
