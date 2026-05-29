@@ -1,0 +1,54 @@
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from django.conf import settings
+from .models import UserSubscription
+
+@receiver(post_save, sender=settings.AUTH_USER_MODEL)
+def create_user_subscription(sender, instance, created, **kwargs):
+    if created:
+        UserSubscription.objects.create(user=instance, tier='Free')
+
+from django.db.models.signals import pre_save
+from .models import SubscriptionHistory
+
+@receiver(pre_save, sender=UserSubscription)
+def log_subscription_change(sender, instance, **kwargs):
+    if instance.pk:
+        try:
+            old_instance = UserSubscription.objects.get(pk=instance.pk)
+            if old_instance.tier != instance.tier:
+                action = 'UPGRADE'
+                tiers = ['Free', 'Plus', 'Premium', 'Pro']
+                try:
+                    old_idx = tiers.index(old_instance.tier)
+                    new_idx = tiers.index(instance.tier)
+                    if new_idx < old_idx:
+                        action = 'DOWNGRADE'
+                        if instance.tier == 'Free':
+                            action = 'CANCEL'
+                except ValueError:
+                    pass
+
+                SubscriptionHistory.objects.create(
+                    user=instance.user,
+                    tier=instance.tier,
+                    action=action,
+                    note=f"Thay đổi từ {old_instance.tier} sang {instance.tier}"
+                )
+            elif old_instance.end_date != instance.end_date and instance.end_date:
+                SubscriptionHistory.objects.create(
+                    user=instance.user,
+                    tier=instance.tier,
+                    action='RENEW',
+                    note="Gia hạn thời gian sử dụng"
+                )
+        except UserSubscription.DoesNotExist:
+            pass
+    else:
+        if instance.tier != 'Free':
+            SubscriptionHistory.objects.create(
+                user=instance.user,
+                tier=instance.tier,
+                action='UPGRADE',
+                note="Khởi tạo gói"
+            )

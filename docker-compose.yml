@@ -132,6 +132,33 @@ services:
     networks:
       - xiaoyue-network
 
+  # ── Celery Beat (Scheduler) ──
+  celery-beat:
+    build:
+      context: ./core_django
+    command: celery -A core_project beat --loglevel=info
+    depends_on:
+      redis:
+        condition: service_healthy
+      core-django:
+        condition: service_started
+    environment:
+      - DATABASE_URL=postgres://xiaoyue:***REMOVED***@db:5432/xiaoyue
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    env_file:
+      - ./core_django/.env
+    volumes:
+      - ./core_django:/app
+    deploy:
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
   # ── Celery Worker (AI English Audio) ──
   celery-worker-ai-en:
     build:
@@ -216,7 +243,7 @@ services:
       - xiaoyue-network
 
   # ══════════════════════════════════════════════════════════
-  #  AI SERVICE — ENGLISH — 6 CPU / 16 GB RAM
+  #  AI SERVICE — ENGLISH — 4 CPU / 16 GB RAM
   # ══════════════════════════════════════════════════════════
 
   ai-service-en:
