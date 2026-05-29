@@ -10,3 +10,5 @@ dj-database-url
 pyspellchecker
 google-generativeai 
 google-cloud-aiplatform 
+djangorestframework-simplejwt 
+Pillow
