@@ -36,3 +36,44 @@ class ChangePasswordView(generics.UpdateAPIView):
             user.save()
             return Response({"detail": "Đổi mật khẩu thành công."}, status=200)
         return Response(serializer.errors, status=400)
+
+
+from rest_framework.views import APIView
+from django.conf import settings
+from datetime import datetime, timedelta, timezone
+import jwt
+import uuid
+
+
+class WsTokenView(APIView):
+    """
+    POST /api/v1/users/ws-token/
+    Issues a short-lived JWT (2 minutes) specifically for WebSocket handshake.
+    The token includes purpose='websocket' to prevent reuse as an access token.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        now = datetime.now(timezone.utc)
+        
+        if request.user.is_authenticated:
+            user_id = str(request.user.id)
+            username = request.user.username
+        else:
+            # Guest logic
+            guest_id = request.data.get('guest_id')
+            if not guest_id or not str(guest_id).startswith('guest_'):
+                guest_id = f"guest_{uuid.uuid4().hex[:12]}"
+            user_id = str(guest_id)
+            username = "Guest"
+
+        payload = {
+            "user_id": user_id,
+            "username": username,
+            "purpose": "websocket",
+            "iat": now,
+            "exp": now + timedelta(minutes=2),
+        }
+        token = jwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")
+        return Response({"ws_token": token, "user_id": user_id})
+

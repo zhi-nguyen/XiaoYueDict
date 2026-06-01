@@ -1,5 +1,6 @@
 import uuid
 from django.db import models
+from django.conf import settings
 
 
 class AssessmentTask(models.Model):
@@ -16,6 +17,14 @@ class AssessmentTask(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assessments',
+        help_text="Nullable — system allows anonymous usage",
+    )
     audio_file = models.FileField(upload_to='audio_temp/')
     target_text = models.TextField(blank=True, default='')
     language = models.CharField(max_length=5, choices=LANGUAGE_CHOICES, default='en')

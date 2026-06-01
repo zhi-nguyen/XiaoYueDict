@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     'apps.users',
     'apps.subscriptions',
     'apps.gamification',
+    'apps.notifications',
     'rest_framework_simplejwt',
 ]
 
@@ -110,7 +111,7 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '5/minute',
+        'anon': '10/minute',
         'user': '30/minute',
     },
     'DEFAULT_AUTHENTICATION_CLASSES': (

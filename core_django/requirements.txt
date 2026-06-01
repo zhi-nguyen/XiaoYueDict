@@ -12,3 +12,4 @@ google-generativeai
 google-cloud-aiplatform 
 djangorestframework-simplejwt 
 Pillow
+PyJWT>=2.8
