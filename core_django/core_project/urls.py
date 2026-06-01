@@ -12,6 +12,7 @@ urlpatterns = [
     path('api/v1/users/', include('apps.users.urls')),
     path('api/v1/gamification/', include('apps.gamification.urls')),
     path('api/v1/subscriptions/', include('apps.subscriptions.urls')),
+    path('api/v1/notifications/', include('apps.notifications.urls')),
 ]
 
 if settings.DEBUG:

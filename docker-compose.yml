@@ -17,6 +17,8 @@ services:
     depends_on:
       core-django:
         condition: service_started
+      ws-gateway:
+        condition: service_started
       ai-service-en:
         condition: service_started
       ai-service-zh:
@@ -42,6 +44,25 @@ services:
       resources:
         limits:
           cpus: "0.50"
+          memory: 1G
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── WebSocket Gateway ──
+  ws-gateway:
+    build:
+      context: ./ws_gateway
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET_KEY=${YOUR_SECURE_SECRET}
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
           memory: 1G
     restart: unless-stopped
     networks:

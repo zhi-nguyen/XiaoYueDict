@@ -4,6 +4,7 @@ import logging
 import requests
 from celery import shared_task
 from .models import AssessmentTask
+from core_project.ws_utils import ws_notify
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ def cleanup_audio_files(*paths):
 # ── Celery Task ───────────────────────────────────────────────
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=5)
-def process_audio_task(self, assessment_id, file_path, target_text='', language='en'):
+def process_audio_task(self, assessment_id, file_path, target_text='', language='en', user_id=None):
     """
     Reads an audio file from local path and sends it to the appropriate AI service.
     Routes based on `language`:
@@ -191,6 +192,19 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
         task.save(update_fields=['status', 'score', 'result_data'])
 
         logger.warning(f"✅ Assessment {assessment_id} ({language}) - Score: {task.score}")
+
+        # Notify user via WebSocket
+        ws_notify(
+            user_id=user_id,
+            event_type='score_complete',
+            title=f'Chấm điểm hoàn tất — {task.score:.0f} điểm' if task.score else 'Chấm điểm hoàn tất',
+            payload={
+                'task_id': str(assessment_id),
+                'score': task.score,
+                'language': language,
+            },
+        )
+
         return score_data
 
     except requests.exceptions.Timeout:
@@ -224,6 +238,19 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
         task.status = 'FAILED'
         task.error_message = error_msg
         task.save(update_fields=['status', 'error_message'])
+
+        # Notify user of failure via WebSocket
+        ws_notify(
+            user_id=user_id,
+            event_type='score_failed',
+            title='Chấm điểm thất bại',
+            payload={
+                'task_id': str(assessment_id),
+                'error': error_msg,
+                'language': language,
+            },
+        )
+
         return {"error": error_msg}
 
     finally:

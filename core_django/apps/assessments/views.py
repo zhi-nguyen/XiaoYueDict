@@ -34,6 +34,7 @@ class SubmitAssessmentView(APIView):
             )
 
         task = AssessmentTask.objects.create(
+            user=request.user if request.user.is_authenticated else None,
             audio_file=audio_file,
             target_text=target_text,
             language=language,
@@ -42,12 +43,15 @@ class SubmitAssessmentView(APIView):
 
         # Trigger Celery task — language determines which AI service to call
         target_queue = 'queue_ai_zh' if language == 'zh' else 'queue_ai_en'
+        guest_id = request.data.get('guest_id')
+        user_id = str(request.user.id) if request.user.is_authenticated else guest_id
         process_audio_task.apply_async(
             args=[
                 str(task.id),
                 task.audio_file.path,
                 target_text,
                 language,
+                user_id,
             ],
             queue=target_queue
         )
