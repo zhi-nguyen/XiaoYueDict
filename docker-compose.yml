@@ -116,6 +116,7 @@ services:
       - ./core_django:/app
       - django_static:/app/staticfiles
       - django_media:/app/media
+      - D:/XiaoYueDict_data:/data
     deploy:
       resources:
         limits:
@@ -144,6 +145,7 @@ services:
     volumes:
       - ./core_django:/app
       - django_media:/app/media
+      - D:/XiaoYueDict_data:/data
     deploy:
       resources:
         limits:
@@ -198,6 +200,7 @@ services:
     volumes:
       - ./core_django:/app
       - django_media:/app/media
+      - D:/XiaoYueDict_data:/data
     deploy:
       resources:
         limits:
@@ -225,6 +228,7 @@ services:
     volumes:
       - ./core_django:/app
       - django_media:/app/media
+      - D:/XiaoYueDict_data:/data
     deploy:
       resources:
         limits:
