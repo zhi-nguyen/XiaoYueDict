@@ -8,6 +8,7 @@ from django.db.models.functions import Length, StrIndex
 from .models import ZhWord, ZhExample
 from .serializers import ZhWordSerializer
 import re
+import jieba
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 20
@@ -80,7 +81,10 @@ class ZhWordSearchView(generics.ListAPIView):
             ).order_by('adjusted_rank')
 
         q_lower = query.lower()
-        query_obj = SearchQuery(query, config='simple')
+        
+        # Tokenize query for FTS Search
+        tokenized_query = " ".join(jieba.cut(query))
+        query_obj = SearchQuery(tokenized_query, config='simple')
         
         # 0. Subquery to check for example match without causing joins
         has_example_match = Exists(

@@ -13,3 +13,4 @@ google-cloud-aiplatform
 djangorestframework-simplejwt 
 Pillow
 PyJWT>=2.8
+jieba

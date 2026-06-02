@@ -47,7 +47,9 @@ class ZhWord(models.Model):
     def __str__(self):
         return f"{self.word} ({self.pinyin})"
 
-from django.contrib.postgres.search import SearchVectorField
+from django.contrib.postgres.search import SearchVectorField, SearchVector
+from django.db.models import Value
+import jieba
 
 class ZhExample(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -66,3 +68,15 @@ class ZhExample(models.Model):
 
     def __str__(self):
         return self.chinese
+
+    def save(self, *args, **kwargs):
+        # Lưu đối tượng trước để chắc chắn có ID
+        super().save(*args, **kwargs)
+        
+        # Tiền xử lý: Dùng jieba cắt từ tiếng Trung và nối bằng khoảng trắng
+        tokenized_chinese = " ".join(jieba.cut(self.chinese))
+        
+        # Cập nhật trường search_vector bằng query update() để tránh đệ quy save()
+        ZhExample.objects.filter(pk=self.pk).update(
+            search_vector=SearchVector(Value(tokenized_chinese), config='simple')
+        )
