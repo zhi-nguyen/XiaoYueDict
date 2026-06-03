@@ -57,8 +57,10 @@ services:
       redis:
         condition: service_healthy
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - JWT_SECRET_KEY=${YOUR_SECURE_SECRET}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    env_file:
+      - .env
     deploy:
       resources:
         limits:
@@ -71,10 +73,14 @@ services:
   # ── Database ──
   db:
     image: postgres:16-alpine
+    ports:
+      - "5433:5432"
     environment:
-      POSTGRES_DB: xiaoyue
-      POSTGRES_USER: xiaoyue
-      POSTGRES_PASSWORD: ${YOUR_SECURE_SECRET}
+      POSTGRES_DB: ${POSTGRES_DB:-xiaoyue}
+      POSTGRES_USER: ${POSTGRES_USER:-xiaoyue}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    env_file:
+      - .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -105,13 +111,13 @@ services:
       db:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgres://xiaoyue:${YOUR_SECURE_SECRET}@db:5432/xiaoyue
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - AI_SERVICE_EN_URL=http://ai-service-en:8000/api/v1/score
-      - AI_SERVICE_ZH_URL=http://ai-service-zh:8001/api/v1/score
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL:-http://ai-service-en:8000/api/v1/score}
+      - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL:-http://ai-service-zh:8001/api/v1/score}
     env_file:
-      - ./core_django/.env
+      - .env
     volumes:
       - ./core_django:/app
       - django_static:/app/staticfiles
@@ -137,11 +143,11 @@ services:
       core-django:
         condition: service_started
     environment:
-      - DATABASE_URL=postgres://xiaoyue:${YOUR_SECURE_SECRET}@db:5432/xiaoyue
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
     env_file:
-      - ./core_django/.env
+      - .env
     volumes:
       - ./core_django:/app
       - django_media:/app/media
@@ -166,11 +172,11 @@ services:
       core-django:
         condition: service_started
     environment:
-      - DATABASE_URL=postgres://xiaoyue:${YOUR_SECURE_SECRET}@db:5432/xiaoyue
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
     env_file:
-      - ./core_django/.env
+      - .env
     volumes:
       - ./core_django:/app
     deploy:
@@ -193,10 +199,12 @@ services:
       core-django:
         condition: service_started
     environment:
-      - DATABASE_URL=postgres://xiaoyue:${YOUR_SECURE_SECRET}@db:5432/xiaoyue
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - AI_SERVICE_EN_URL=http://ai-service-en:8000/api/v1/score
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL:-http://ai-service-en:8000/api/v1/score}
+    env_file:
+      - .env
     volumes:
       - ./core_django:/app
       - django_media:/app/media
@@ -221,10 +229,12 @@ services:
       core-django:
         condition: service_started
     environment:
-      - DATABASE_URL=postgres://xiaoyue:${YOUR_SECURE_SECRET}@db:5432/xiaoyue
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - AI_SERVICE_ZH_URL=http://ai-service-zh:8001/api/v1/score
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL:-http://ai-service-zh:8001/api/v1/score}
+    env_file:
+      - .env
     volumes:
       - ./core_django:/app
       - django_media:/app/media
