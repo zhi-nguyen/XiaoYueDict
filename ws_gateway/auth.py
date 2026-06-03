@@ -12,7 +12,7 @@ import jwt
 
 logger = logging.getLogger(__name__)
 
-JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "***REMOVED***")
+JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "replace-this-in-production")
 JWT_ALGORITHM = "HS256"
 
 
