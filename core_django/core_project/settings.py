@@ -4,7 +4,7 @@ import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = '${YOUR_SECURE_SECRET}'
+SECRET_KEY = os.environ.get('SECRET_KEY', 'replace-this-in-production')
 
 DEBUG = True
 
@@ -24,7 +24,14 @@ INSTALLED_APPS = [
     'apps.notes',
     'apps.dictionary_zh',
     'apps.dictionary_en',
+    'apps.users',
+    'apps.subscriptions',
+    'apps.gamification',
+    'apps.notifications',
+    'rest_framework_simplejwt',
 ]
+
+AUTH_USER_MODEL = 'users.CustomUser'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -67,7 +74,7 @@ DATABASES = {
 }
 
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Ho_Chi_Minh'
 USE_I18N = True
 USE_TZ = True
 
@@ -88,7 +95,15 @@ CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'UTC'
+CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh'
+
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    'calculate-streaks-every-midnight': {
+        'task': 'apps.gamification.tasks.calculate_daily_streaks',
+        'schedule': crontab(hour=0, minute=0),
+    },
+}
 
 REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_CLASSES': [
@@ -96,7 +111,22 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '5/minute',
+        'anon': '10/minute',
         'user': '30/minute',
-    }
+    },
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    )
 }
+
+from datetime import timedelta
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
+
+# External Data Storage (mounted from D:/XiaoYueDict_data)
+XIAOYUE_DATA_ROOT = os.environ.get('XIAOYUE_DATA_ROOT', '/data')

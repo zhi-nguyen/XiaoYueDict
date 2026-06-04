@@ -2,8 +2,12 @@ import os
 import subprocess
 import logging
 import requests
+import shutil
+import json
+from django.conf import settings
 from celery import shared_task
 from .models import AssessmentTask
+from core_project.ws_utils import ws_notify
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +92,7 @@ def cleanup_audio_files(*paths):
 # ── Celery Task ───────────────────────────────────────────────
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=5)
-def process_audio_task(self, assessment_id, file_path, target_text='', language='en'):
+def process_audio_task(self, assessment_id, file_path, target_text='', language='en', user_id=None):
     """
     Reads an audio file from local path and sends it to the appropriate AI service.
     Routes based on `language`:
@@ -191,6 +195,47 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
         task.save(update_fields=['status', 'score', 'result_data'])
 
         logger.warning(f"✅ Assessment {assessment_id} ({language}) - Score: {task.score}")
+
+        # ── Step 3.5: Save to Persistent Storage ──
+        try:
+            # Determine folder name (user_id if available, else anonymous)
+            user_folder = str(task.user.id) if task.user else str(user_id) if user_id else "anonymous"
+            data_dir = os.path.join(settings.XIAOYUE_DATA_ROOT, user_folder)
+            os.makedirs(data_dir, exist_ok=True)
+            
+            # Copy original audio file
+            ext = os.path.splitext(file_path)[1] or '.wav'
+            perm_audio_path = os.path.join(data_dir, f"{assessment_id}{ext}")
+            shutil.copy2(file_path, perm_audio_path)
+            
+            # Write JSON file
+            json_path = os.path.join(data_dir, f"{assessment_id}.json")
+            json_data = {
+                "id": str(task.id),
+                "language": task.language,
+                "score": task.score,
+                "result_data": task.result_data,
+                "created_at": task.created_at.isoformat()
+            }
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(json_data, f, ensure_ascii=False, indent=4)
+                
+            logger.info(f"💾 Saved permanent files to {data_dir}")
+        except Exception as perm_err:
+            logger.error(f"⚠️ Failed to save permanent files: {perm_err}")
+
+        # Notify user via WebSocket
+        ws_notify(
+            user_id=user_id,
+            event_type='score_complete',
+            title=f'Chấm điểm hoàn tất — {task.score:.0f} điểm' if task.score else 'Chấm điểm hoàn tất',
+            payload={
+                'task_id': str(assessment_id),
+                'score': task.score,
+                'language': language,
+            },
+        )
+
         return score_data
 
     except requests.exceptions.Timeout:
@@ -224,6 +269,19 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
         task.status = 'FAILED'
         task.error_message = error_msg
         task.save(update_fields=['status', 'error_message'])
+
+        # Notify user of failure via WebSocket
+        ws_notify(
+            user_id=user_id,
+            event_type='score_failed',
+            title='Chấm điểm thất bại',
+            payload={
+                'task_id': str(assessment_id),
+                'error': error_msg,
+                'language': language,
+            },
+        )
+
         return {"error": error_msg}
 
     finally:

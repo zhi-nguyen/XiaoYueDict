@@ -105,3 +105,5 @@ test*.py
 output*.txt  
 core_django/test*.py  
 core_django/hsk_data/ 
+/test_s
+core_django/key.json

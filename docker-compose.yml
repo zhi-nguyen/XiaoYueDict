@@ -17,6 +17,8 @@ services:
     depends_on:
       core-django:
         condition: service_started
+      ws-gateway:
+        condition: service_started
       ai-service-en:
         condition: service_started
       ai-service-zh:
@@ -47,13 +49,38 @@ services:
     networks:
       - xiaoyue-network
 
+  # ── WebSocket Gateway ──
+  ws-gateway:
+    build:
+      context: ./ws_gateway
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    env_file:
+      - .env
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 1G
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
   # ── Database ──
   db:
     image: postgres:16-alpine
+    ports:
+      - "5433:5432"
     environment:
-      POSTGRES_DB: xiaoyue
-      POSTGRES_USER: xiaoyue
-      POSTGRES_PASSWORD: ${YOUR_SECURE_SECRET}
+      POSTGRES_DB: ${POSTGRES_DB:-xiaoyue}
+      POSTGRES_USER: ${POSTGRES_USER:-xiaoyue}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    env_file:
+      - .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -84,17 +111,18 @@ services:
       db:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgres://xiaoyue:${YOUR_SECURE_SECRET}@db:5432/xiaoyue
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - AI_SERVICE_EN_URL=http://ai-service-en:8000/api/v1/score
-      - AI_SERVICE_ZH_URL=http://ai-service-zh:8001/api/v1/score
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL:-http://ai-service-en:8000/api/v1/score}
+      - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL:-http://ai-service-zh:8001/api/v1/score}
     env_file:
-      - ./core_django/.env
+      - .env
     volumes:
       - ./core_django:/app
       - django_static:/app/staticfiles
       - django_media:/app/media
+      - D:/XiaoYueDict_data:/data
     deploy:
       resources:
         limits:
@@ -115,19 +143,47 @@ services:
       core-django:
         condition: service_started
     environment:
-      - DATABASE_URL=postgres://xiaoyue:${YOUR_SECURE_SECRET}@db:5432/xiaoyue
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
     env_file:
-      - ./core_django/.env
+      - .env
     volumes:
       - ./core_django:/app
       - django_media:/app/media
+      - D:/XiaoYueDict_data:/data
     deploy:
       resources:
         limits:
           cpus: "1.0"
           memory: 2G
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── Celery Beat (Scheduler) ──
+  celery-beat:
+    build:
+      context: ./core_django
+    command: celery -A core_project beat --loglevel=info
+    depends_on:
+      redis:
+        condition: service_healthy
+      core-django:
+        condition: service_started
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+    env_file:
+      - .env
+    volumes:
+      - ./core_django:/app
+    deploy:
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 512M
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -143,13 +199,16 @@ services:
       core-django:
         condition: service_started
     environment:
-      - DATABASE_URL=postgres://xiaoyue:${YOUR_SECURE_SECRET}@db:5432/xiaoyue
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - AI_SERVICE_EN_URL=http://ai-service-en:8000/api/v1/score
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL:-http://ai-service-en:8000/api/v1/score}
+    env_file:
+      - .env
     volumes:
       - ./core_django:/app
       - django_media:/app/media
+      - D:/XiaoYueDict_data:/data
     deploy:
       resources:
         limits:
@@ -170,13 +229,16 @@ services:
       core-django:
         condition: service_started
     environment:
-      - DATABASE_URL=postgres://xiaoyue:${YOUR_SECURE_SECRET}@db:5432/xiaoyue
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - AI_SERVICE_ZH_URL=http://ai-service-zh:8001/api/v1/score
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL:-http://ai-service-zh:8001/api/v1/score}
+    env_file:
+      - .env
     volumes:
       - ./core_django:/app
       - django_media:/app/media
+      - D:/XiaoYueDict_data:/data
     deploy:
       resources:
         limits:
@@ -216,7 +278,7 @@ services:
       - xiaoyue-network
 
   # ══════════════════════════════════════════════════════════
-  #  AI SERVICE — ENGLISH — 6 CPU / 16 GB RAM
+  #  AI SERVICE — ENGLISH — 4 CPU / 16 GB RAM
   # ══════════════════════════════════════════════════════════
 
   ai-service-en:
