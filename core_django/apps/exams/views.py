@@ -20,9 +20,9 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Exam.objects.filter(status=1).order_by('level', 'created_at')
     permission_classes = [permissions.AllowAny]
     throttle_classes = [ScopedRateThrottle]
-    throttle_scope = 'exam_fetch'
 
-    def get_throttle_scope(self):
+    @property
+    def throttle_scope(self):
         if self.action == 'list':
             return 'user'
         return 'exam_fetch'
