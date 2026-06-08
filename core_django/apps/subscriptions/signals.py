@@ -52,3 +52,18 @@ def log_subscription_change(sender, instance, **kwargs):
                 action='UPGRADE',
                 note="Khởi tạo gói"
             )
+
+
+from .models import VolumeLimitConfig
+from core_project.ws_utils import get_redis_client
+
+@receiver(post_save, sender=VolumeLimitConfig)
+def sync_volume_limit_to_redis(sender, instance, **kwargs):
+    r = get_redis_client()
+    config_key = f"config:volume:{instance.tier.upper()}"
+    r.hset(config_key, mapping={
+        'min': instance.mb_per_minute * 1024 * 1024,
+        'hr': instance.mb_per_hour * 1024 * 1024,
+        'day': instance.mb_per_day * 1024 * 1024
+    })
+

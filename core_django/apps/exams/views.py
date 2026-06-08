@@ -7,6 +7,8 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.throttling import ScopedRateThrottle
+from django.core.cache import cache
 from .models import Exam, Section, Question, Option
 from .serializers import ExamSerializer, ExamListSerializer
 
@@ -17,6 +19,13 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
     """
     queryset = Exam.objects.filter(status=1).order_by('level', 'created_at')
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'exam_fetch'
+
+    def get_throttle_scope(self):
+        if self.action == 'list':
+            return 'user'
+        return 'exam_fetch'
 
     def get_serializer_class(self):
         # List view uses a lightweight serializer (no sections/questions included)
@@ -41,8 +50,15 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
         Alias for retrieve to explicitly fetch full exam with sections, questions and options.
         """
         exam = self.get_object()
+        cache_key = f"exam:data:{exam.exam_id}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response(cached_data)
+
         serializer = ExamSerializer(exam)
-        return Response(serializer.data)
+        data = serializer.data
+        cache.set(cache_key, data, timeout=24 * 60 * 60)  # 24 hours
+        return Response(data)
 
     @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser])
     def upload_full_exam(self, request):
@@ -194,6 +210,9 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
                                     'ordering': o_idx
                                 }
                             )
+
+            # Evict cache for this exam
+            cache.delete(f"exam:data:{exam_id}")
 
             return Response({
                 'message': 'Exam uploaded successfully',

@@ -43,3 +43,20 @@ class SubscriptionHistory(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.action} - {self.tier}"
+
+
+class VolumeLimitConfig(models.Model):
+    TIER_CHOICES = [
+        ('Free', 'Free'),
+        ('Plus', 'Plus'),
+        ('Premium', 'Premium'),
+        ('Pro', 'Pro'),
+    ]
+    tier = models.CharField(max_length=20, choices=TIER_CHOICES, unique=True)
+    mb_per_minute = models.PositiveIntegerField(default=2)
+    mb_per_hour = models.PositiveIntegerField(default=20)
+    mb_per_day = models.PositiveIntegerField(default=100)
+
+    def __str__(self):
+        return f"Config {self.tier}: {self.mb_per_minute}MB/m, {self.mb_per_hour}MB/h, {self.mb_per_day}MB/d"
+
