@@ -82,7 +82,10 @@ class VolumeLimitMiddleware(MiddlewareMixin):
                     guest_id = request.POST.get('guest_id')
                 identifier = guest_id if guest_id else request.META.get('REMOTE_ADDR', 'anonymous')
                 user_id = f"guest:{identifier}"
-                tier = 'FREE'
+                tier = 'GUEST'
+
+            # Lưu lại rate_limit_user_id để views/tasks có thể truy cập
+            request.rate_limit_user_id = user_id
 
             # 3. Truy vấn cấu hình giới hạn dung lượng (Bytes) từ Redis Hash
             config_key = f"config:volume:{tier}"
@@ -143,3 +146,50 @@ class VolumeLimitMiddleware(MiddlewareMixin):
                 return response
 
         return None
+
+
+def refund_volume_limit(user_id: str, refund_bytes: int):
+    """
+    Hoàn trả lại số lượng bytes đã khấu trừ của người dùng trong trường hợp hệ thống 
+    xử lý tác vụ thất bại do lỗi nội bộ hoặc lỗi dịch vụ máy chủ.
+    """
+    if not user_id or not refund_bytes or refund_bytes <= 0:
+        return
+    
+    from core_project.ws_utils import get_redis_client
+    r = get_redis_client()
+    
+    # Kịch bản Lua xử lý hoàn dung lượng an toàn (Atomic Refund Script)
+    LUA_REFUND = """
+    -- keys: KEYS[1] (min), KEYS[2] (hr), KEYS[3] (day)
+    -- args: ARGV[1] (refund_bytes)
+
+    local refund = tonumber(ARGV[1])
+
+    for i, key in ipairs(KEYS) do
+        local current = redis.call('GET', key)
+        -- Chỉ thực hiện hoàn trả dung lượng nếu khóa vẫn đang tồn tại trong bộ nhớ (chưa quá hạn TTL)
+        if current then
+            local new_val = tonumber(current) - refund
+            -- Đảm bảo dung lượng không bị âm
+            if new_val < 0 then new_val = 0 end
+            
+            -- Cập nhật giá trị mới và duy trì nguyên vẹn thời gian sống (TTL) còn lại của khóa
+            redis.call('SET', key, new_val, 'KEEPTTL') 
+        end
+    end
+
+    return 1
+    """
+    try:
+        lua_refund_executor = r.register_script(LUA_REFUND)
+        
+        key_min = f"vol:{user_id}:min"
+        key_hr = f"vol:{user_id}:hr"
+        key_day = f"vol:{user_id}:day"
+        
+        lua_refund_executor(keys=[key_min, key_hr, key_day], args=[refund_bytes])
+        logger.info(f"Successfully refunded {refund_bytes} bytes to rate limit for user {user_id}")
+    except Exception as e:
+        logger.error(f"Error executing Lua refund script for {user_id}: {e}")
+

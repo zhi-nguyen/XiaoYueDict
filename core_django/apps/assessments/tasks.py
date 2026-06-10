@@ -6,8 +6,11 @@ import shutil
 import json
 from django.conf import settings
 from celery import shared_task
+from celery.exceptions import Retry, MaxRetriesExceededError
+from requests.exceptions import RequestException
 from .models import AssessmentTask
 from core_project.ws_utils import ws_notify
+from apps.subscriptions.middleware import refund_volume_limit
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +95,7 @@ def cleanup_audio_files(*paths):
 # ── Celery Task ───────────────────────────────────────────────
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=5)
-def process_audio_task(self, assessment_id, file_path, target_text='', language='en', user_id=None):
+def process_audio_task(self, assessment_id, file_path, target_text='', language='en', user_id=None, rate_limit_user_id=None):
     """
     Reads an audio file from local path and sends it to the appropriate AI service.
     Routes based on `language`:
@@ -113,26 +116,41 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
         logger.error(f"AssessmentTask {assessment_id} not found.")
         return {"error": "Task not found"}
 
+    # Reconstruct rate_limit_user_id if not provided
+    if not rate_limit_user_id:
+        if task.user:
+            rate_limit_user_id = f"user:{task.user.id}"
+        elif user_id:
+            if str(user_id).startswith('user:') or str(user_id).startswith('guest:'):
+                rate_limit_user_id = str(user_id)
+            else:
+                rate_limit_user_id = f"guest:{user_id}"
+        else:
+            rate_limit_user_id = "guest:anonymous"
+
+    # Determine file size (rate_limit_bytes) for potential refund
+    file_size = 0
+    try:
+        if os.path.exists(file_path):
+            file_size = os.path.getsize(file_path)
+        elif task.audio_file:
+            file_size = task.audio_file.size
+    except Exception as e:
+        logger.warning(f"Could not determine file size for rate limit refund: {e}")
+
     task.status = 'PROCESSING'
     task.save(update_fields=['status'])
 
-    if not os.path.exists(file_path):
-        logger.error(f"File {file_path} does not exist.")
-        task.status = 'FAILED'
-        task.error_message = f"Audio file not found at {file_path}"
-        task.save(update_fields=['status', 'error_message'])
-        return {"error": "File not found"}
-
-    # Determine the AI service URL based on language
-    ai_service_url = AI_SERVICE_URLS.get(language)
-    if not ai_service_url:
-        task.status = 'FAILED'
-        task.error_message = f"Unsupported language: {language}"
-        task.save(update_fields=['status', 'error_message'])
-        cleanup_audio_files(file_path)
-        return {"error": f"Unsupported language: {language}"}
-
     try:
+        # ── Pre-validation of file ──
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Audio file not found at {file_path}")
+
+        # Determine the AI service URL based on language
+        ai_service_url = AI_SERVICE_URLS.get(language)
+        if not ai_service_url:
+            raise ValueError(f"Unsupported language: {language}")
+
         # ── Step 1: Convert to 16 kHz mono WAV ──
         converted_path = convert_audio_to_16k(file_path)
         send_path = converted_path  # use converted file for inference
@@ -148,30 +166,23 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
                 ai_service_url,
                 files=files,
                 data=data,
-                timeout=30,  # 30s timeout for 5-10s processing budget + network
+                timeout=30,  # 30s timeout
             )
 
         # ── Handle AI service errors by status code ──
-        if response.status_code == 503:
-            # Server overloaded (OOM / model busy) → retry
-            error_detail = response.json().get('detail', 'AI service overloaded')
-            logger.warning(f"⚠️ AI service ({language}) returned 503: {error_detail}")
-            task.status = 'PENDING'
-            task.error_message = error_detail
-            task.save(update_fields=['status', 'error_message'])
-            raise self.retry(
-                exc=Exception(error_detail),
-                countdown=10,  # wait 10s before retry
-            )
-
+        # Lỗi Client (400) -> Không hoàn dung lượng
         if response.status_code == 400:
-            # Client-side issue (no speech, bad input) → fail with user message
             error_detail = response.json().get('detail', 'Invalid audio input')
             logger.warning(f"⚠️ AI service ({language}) returned 400: {error_detail}")
             task.status = 'FAILED'
             task.error_message = error_detail
             task.save(update_fields=['status', 'error_message'])
-            return {"error": error_detail}
+            return {"error": error_detail, "status": "failed", "reason": "client_error"}
+
+        # Nếu AI Service phản hồi lỗi cấu trúc hệ thống (500, 502, 503, 504...)
+        # Chủ động ném ngoại lệ để đi vào khối except xử lý retry hoặc hoàn tiền
+        if response.status_code in [500, 502, 503, 504]:
+            response.raise_for_status()
 
         response.raise_for_status()
         score_data = response.json()
@@ -199,7 +210,8 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
         # ── Step 3.5: Save to Persistent Storage ──
         try:
             # Determine folder name (user_id if available, else anonymous)
-            user_folder = str(task.user.id) if task.user else str(user_id) if user_id else "anonymous"
+            raw_user_identifier = str(user_id).split(':')[-1] if user_id else "anonymous"
+            user_folder = str(task.user.id) if task.user else raw_user_identifier
             data_dir = os.path.join(settings.XIAOYUE_DATA_ROOT, user_folder)
             os.makedirs(data_dir, exist_ok=True)
             
@@ -238,51 +250,83 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
 
         return score_data
 
-    except requests.exceptions.Timeout:
-        error_msg = f"AI service ({language}) timed out after 30s"
-        logger.error(f"❌ {error_msg}")
+    except FileNotFoundError as exc:
+        logger.error(f"❌ File not found error: {exc}")
         task.status = 'FAILED'
-        task.error_message = error_msg
+        task.error_message = f"Audio file not found: {str(exc)}"
         task.save(update_fields=['status', 'error_message'])
-        return {"error": error_msg}
-
-    except requests.exceptions.ConnectionError as e:
-        error_msg = f"Cannot connect to AI service ({language}): {e}"
-        logger.error(f"❌ {error_msg}")
-        task.status = 'FAILED'
-        task.error_message = error_msg
-        task.save(update_fields=['status', 'error_message'])
-        # Retry on connection errors (service might be starting up)
-        raise self.retry(exc=e)
-
-    except requests.exceptions.RequestException as e:
-        error_msg = f"AI service request failed ({language}): {e}"
-        logger.error(f"❌ {error_msg}")
-        task.status = 'FAILED'
-        task.error_message = error_msg
-        task.save(update_fields=['status', 'error_message'])
-        return {"error": error_msg}
-
-    except Exception as e:
-        error_msg = f"Unexpected error processing {assessment_id}: {e}"
-        logger.error(f"❌ {error_msg}")
-        task.status = 'FAILED'
-        task.error_message = error_msg
-        task.save(update_fields=['status', 'error_message'])
-
-        # Notify user of failure via WebSocket
+        
+        # Gửi thông báo WebSocket thất bại
         ws_notify(
             user_id=user_id,
             event_type='score_failed',
-            title='Chấm điểm thất bại',
+            title='Chấm điểm thất bại (Không tìm thấy tệp âm thanh)',
             payload={
                 'task_id': str(assessment_id),
-                'error': error_msg,
+                'error': task.error_message,
                 'language': language,
             },
         )
+        
+        if rate_limit_user_id and file_size:
+            refund_volume_limit(rate_limit_user_id, file_size)
+        return {"status": "error", "reason": "file_not_found_on_disk"}
 
-        return {"error": error_msg}
+    except (RequestException, Exception) as exc:
+        logger.error(f"❌ Error processing {assessment_id}: {exc}")
+        # Quản lý cơ chế retry đối với các sự cố gián đoạn mạng hoặc lỗi hệ thống
+        try:
+            countdown = 5
+            # Nếu gặp lỗi 503 từ AI service, có thể chờ lâu hơn
+            if hasattr(exc, 'response') and exc.response is not None and exc.response.status_code == 503:
+                countdown = 10
+                task.status = 'PENDING'
+                error_detail = exc.response.json().get('detail', 'AI service overloaded')
+                task.error_message = error_detail
+                task.save(update_fields=['status', 'error_message'])
+            else:
+                task.status = 'FAILED'
+                task.error_message = str(exc)
+                task.save(update_fields=['status', 'error_message'])
+
+            raise self.retry(exc=exc, countdown=countdown)
+
+        except MaxRetriesExceededError:
+            # Đã chạm ngưỡng thử lại tối đa. Hệ thống chính thức hủy bỏ tác vụ.
+            # Tiến hành hoàn trả dung lượng tài nguyên cho người dùng.
+            task.status = 'FAILED'
+            task.error_message = f"Max retries exceeded: {str(exc)}"
+            task.save(update_fields=['status', 'error_message'])
+            
+            # Gửi thông báo WebSocket thất bại
+            ws_notify(
+                user_id=user_id,
+                event_type='score_failed',
+                title='Chấm điểm thất bại (Hết lượt thử lại)',
+                payload={
+                    'task_id': str(assessment_id),
+                    'error': task.error_message,
+                    'language': language,
+                },
+            )
+            
+            if rate_limit_user_id and file_size:
+                refund_volume_limit(rate_limit_user_id, file_size)
+            return {"status": "error", "reason": "system_max_retries_exhausted"}
+
+        except Retry:
+            # Task đang được Celery đưa vào hàng đợi để retry (chưa hủy hoàn toàn).
+            # Tuyệt đối không hoàn tiền tại đây.
+            raise
+
+        except Exception as inner_exc:
+            # Bất kỳ lỗi bất ngờ nào xảy ra trong quá trình xử lý ngoại lệ
+            task.status = 'FAILED'
+            task.error_message = str(inner_exc)
+            task.save(update_fields=['status', 'error_message'])
+            if rate_limit_user_id and file_size:
+                refund_volume_limit(rate_limit_user_id, file_size)
+            raise inner_exc
 
     finally:
         # ── Step 4: Always cleanup temp audio files ──

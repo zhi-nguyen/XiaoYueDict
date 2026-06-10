@@ -45,6 +45,16 @@ class SubmitAssessmentView(APIView):
         target_queue = 'queue_ai_zh' if language == 'zh' else 'queue_ai_en'
         guest_id = request.data.get('guest_id')
         user_id = str(request.user.id) if request.user.is_authenticated else guest_id
+
+        # Lấy rate_limit_user_id từ middleware hoặc tự sinh làm phương án dự phòng
+        rate_limit_user_id = getattr(request, 'rate_limit_user_id', None)
+        if not rate_limit_user_id:
+            if request.user and request.user.is_authenticated:
+                rate_limit_user_id = f"user:{request.user.id}"
+            else:
+                identifier = guest_id if guest_id else request.META.get('REMOTE_ADDR', 'anonymous')
+                rate_limit_user_id = f"guest:{identifier}"
+
         process_audio_task.apply_async(
             args=[
                 str(task.id),
@@ -53,6 +63,9 @@ class SubmitAssessmentView(APIView):
                 language,
                 user_id,
             ],
+            kwargs={
+                'rate_limit_user_id': rate_limit_user_id,
+            },
             queue=target_queue
         )
 

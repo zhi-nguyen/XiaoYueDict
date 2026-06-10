@@ -41,7 +41,7 @@ class SubscriptionUsageView(APIView):
             guest_id = request.headers.get('X-Guest-ID') or request.GET.get('guest_id')
             identifier = guest_id if guest_id else request.META.get('REMOTE_ADDR', 'anonymous')
             user_id = f"guest:{identifier}"
-            tier = 'FREE'
+            tier = 'GUEST'
 
         # 1. Lấy giới hạn cấu hình
         config_key = f"config:volume:{tier}"
