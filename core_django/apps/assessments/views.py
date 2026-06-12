@@ -33,16 +33,25 @@ class SubmitAssessmentView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Determine the subscription tier and route to the correct physical queue
+        if request.user and request.user.is_authenticated:
+            tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
+            if tier in ('Plus', 'Premium', 'Pro'):
+                target_queue = 'queue_paid'
+            else:
+                target_queue = 'queue_free'
+        else:
+            target_queue = 'queue_guest'
+
         task = AssessmentTask.objects.create(
             user=request.user if request.user.is_authenticated else None,
             audio_file=audio_file,
             target_text=target_text,
             language=language,
             status='PENDING',
+            queue_name=target_queue,
         )
 
-        # Trigger Celery task — language determines which AI service to call
-        target_queue = 'queue_ai_zh' if language == 'zh' else 'queue_ai_en'
         guest_id = request.data.get('guest_id')
         user_id = str(request.user.id) if request.user.is_authenticated else guest_id
 
@@ -69,18 +78,26 @@ class SubmitAssessmentView(APIView):
             queue=target_queue
         )
 
-        # Return initial queue position
+        # Return initial queue position relative to its specific physical queue
         pending_ahead = AssessmentTask.objects.filter(
             status__in=['PENDING', 'PROCESSING'],
+            queue_name=target_queue,
             created_at__lt=task.created_at,
         ).count()
         queue_position = pending_ahead + 1
+
+        # Calculate estimated wait time based on normalized EWT formula:
+        # EWT = ceil(queue_position / concurrency) * processing_time_per_task
+        import math
+        concurrency = 2 if target_queue == 'queue_paid' else 1
+        processing_time_per_task = 7  # seconds
+        estimated_wait_seconds = math.ceil(queue_position / concurrency) * processing_time_per_task
 
         return Response(
             {
                 'task_id': str(task.id),
                 'queue_position': queue_position,
-                'estimated_wait_seconds': queue_position * 7,
+                'estimated_wait_seconds': estimated_wait_seconds,
             },
             status=status.HTTP_202_ACCEPTED,
         )

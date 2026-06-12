@@ -56,11 +56,15 @@ def translate_pure_text_task(self, text_input):
             translated_text = response.text.strip()
             
         if translated_text:
-            return {
+            from django.core.cache import cache
+            result_data = {
                 'translatedText': translated_text,
                 'source': 'ai_translation',
                 'status': 'SUCCESS'
             }
+            # Lưu trữ kết quả AI dịch thuật thành công dài hạn (7 ngày) chống lặp cuộc gọi LLM
+            cache.set(f"ai_trans:{text_input}", {"status": "success", "result": result_data}, timeout=7 * 24 * 60 * 60)
+            return result_data
         else:
             raise Exception('Empty response from AI')
             

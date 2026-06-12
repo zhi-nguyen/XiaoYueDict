@@ -177,6 +177,19 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
             task.status = 'FAILED'
             task.error_message = error_detail
             task.save(update_fields=['status', 'error_message'])
+            
+            # Gửi thông báo WebSocket thất bại
+            ws_notify(
+                user_id=user_id,
+                event_type='score_failed',
+                title='Chấm điểm thất bại',
+                payload={
+                    'task_id': str(assessment_id),
+                    'error': error_detail,
+                    'language': language,
+                },
+            )
+            
             return {"error": error_detail, "status": "failed", "reason": "client_error"}
 
         # Nếu AI Service phản hồi lỗi cấu trúc hệ thống (500, 502, 503, 504...)
