@@ -8,6 +8,7 @@ from django.core.cache import cache
 
 from .models import ZhWord, ZhExample
 from .serializers import ZhWordSerializer
+from apps.ai_gateway import AIFallbackGateway
 import re
 import jieba
 
@@ -48,86 +49,52 @@ class ZhWordSearchView(generics.ListAPIView):
 
     def list(self, request, *args, **kwargs):
         query = self.request.query_params.get('q', '').strip()
-        query_len = len(query)
+        from .tasks import translate_pure_text_task
 
-        # [LỚP 2]: Kiểm tra và giới hạn độ dài đầu vào (Input Guardrail)
-        if query_len > 100:
-            return Response({"detail": "Từ khóa vượt quá độ dài cho phép."}, status=400)
+        db_shared_container = {}
 
-        queryset = self.filter_queryset(self.get_queryset())
-        
-        exact_example = None
-        
-        # Chỉ quét ví dụ nếu độ dài hợp lý (từ 2 đến 100 ký tự)
-        if 2 <= query_len <= 100:
-            from .models import ZhExample
-            
-            # Làm sạch dấu câu ở cuối chuỗi truy vấn (nếu có)
-            cleaned_query = re.sub(r'[。，、！？. , ! ?]+$', '', query)
-            
-            # 1. Thử tìm khớp chính xác hoàn toàn trước (cho phép dấu câu tùy chọn ở cuối)
-            regex_pattern = r'^' + re.escape(cleaned_query) + r'[。，、！？. , ! ?]*$'
-            match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
-            
-            # 2. Nếu không khớp hoàn toàn, mới dùng contains (Quét chuỗi)
-            if not match:
-                match = ZhExample.objects.filter(chinese__contains=cleaned_query).first()
-                
-            if match:
-                exact_example = {
-                    'chinese': match.chinese,
-                    'pinyin': match.pinyin,
-                    'vietnamese': match.vietnamese
-                }
+        def db_lookup():
+            queryset = self.filter_queryset(self.get_queryset())
+            exact_example = None
+            query_len = len(query)
 
-        # Kiểm tra DB Hit
-        db_hit = queryset.exists() or (exact_example is not None)
+            if 2 <= query_len <= 100:
+                from .models import ZhExample
+                cleaned_query = re.sub(r'[。，、！？. , ! ?]+$', '', query)
+                regex_pattern = r'^' + re.escape(cleaned_query) + r'[。，、！？. , ! ?]*$'
+                match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
+                if not match:
+                    match = ZhExample.objects.filter(chinese__contains=cleaned_query).first()
+                if match:
+                    exact_example = {
+                        'chinese': match.chinese,
+                        'pinyin': match.pinyin,
+                        'vietnamese': match.vietnamese
+                    }
 
-        if query and not db_hit:
-            # [LỚP 1]: DB Miss -> Kiểm tra AI Cache chống Cache Stampede
-            ai_cache_key = f"ai_trans:{query}"
-            cached_data = cache.get(ai_cache_key)
+            has_data = queryset.exists() or (exact_example is not None)
+            if has_data:
+                db_shared_container['queryset'] = queryset
+                db_shared_container['exact_example'] = exact_example
+                return True
+            return False
 
-            if cached_data:
-                # KỊCH BẢN A: Tác vụ đã hoàn tất và có dữ liệu phản hồi
-                if cached_data.get('status') == 'success':
-                    return Response(cached_data['result'])
-                    
-                # KỊCH BẢN B: Tác vụ đang được xử lý (Cơ chế ngăn chặn Cache Stampede)
-                if cached_data.get('status') == 'processing':
-                    # Trả về task_id hiện tại để Frontend tiếp tục quá trình Polling, không tính phạt Rate Limit
-                    return Response({"task_id": cached_data['task_id']}, status=202)
+        # Ủy thác phòng thủ cho Gateway dùng chung (Chế độ tiếng Trung)
+        gateway_response = AIFallbackGateway.handle_search_fallback(
+            request=request,
+            query=query,
+            db_lookup_func=db_lookup,
+            task_func=translate_pure_text_task,
+            cache_key_prefix="ai_trans",
+            mode='zh'
+        )
 
-            # =========================================================================
-            # DB MISS & AI CACHE MISS (Khởi tạo tác vụ mới & Throttling)
-            # =========================================================================
-            user = request.user
-            ident = f"user_{user.id}" if user.is_authenticated else f"ip_{get_client_ip(request)}"
-            ai_throttle_key = f"throttle:ai_fallback:{ident}"
-            
-            try:
-                redis_client = cache.client.get_client()
-                current_ai_requests = redis_client.incr(ai_throttle_key)
-                if current_ai_requests == 1:
-                    redis_client.expire(ai_throttle_key, 60)
-            except Exception:
-                current_ai_requests = cache.get(ai_throttle_key, 0) + 1
-                cache.set(ai_throttle_key, current_ai_requests, timeout=60)
+        if gateway_response:
+            return gateway_response
 
-            if current_ai_requests > 3:
-                return Response(
-                    {"detail": "Tài khoản đã vượt định mức dịch thuật từ vựng bằng AI. Vui lòng thử lại sau ít phút."}, 
-                    status=429
-                )
-
-            # KÍCH HOẠT TÁC VỤ CELERY BẤT ĐỒNG BỘ
-            from .tasks import translate_pure_text_task
-            task = translate_pure_text_task.apply_async(args=[query], queue='queue_core')
-
-            # THIẾT LẬP CỜ TRẠNG THÁI TRÊN REDIS (Sử dụng thời gian sống ngắn, ví dụ: 5 phút)
-            cache.set(ai_cache_key, {"status": "processing", "task_id": task.id}, timeout=5 * 60)
-
-            return Response({"task_id": task.id}, status=202)
+        # Phục hồi dữ liệu từ Closure, triệt tiêu Double Query!
+        queryset = db_shared_container['queryset']
+        exact_example = db_shared_container['exact_example']
 
         page = self.paginate_queryset(queryset)
         if page is not None:
@@ -232,45 +199,13 @@ class PureTextTranslationView(APIView):
     throttle_classes = [AnonRateThrottle, UserRateThrottle]
 
     def post(self, request):
-        text_input = request.data.get("text", "").strip()
-        if not text_input:
-            return Response({'error': 'No text provided'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # [LỚP 2]: Kiểm soát độ dài nghiêm ngặt dựa theo phân khúc tài khoản
-        limit = get_translation_char_limit(request.user)
-        if len(text_input) > limit:
-            return Response({
-                "detail": f"Độ dài văn bản vượt quá hạn mức cho phép của tài khoản ({limit} ký tự).",
-                "error": f"Độ dài văn bản vượt quá hạn mức cho phép của tài khoản ({limit} ký tự)."
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        # [LỚP 1]: Kiểm tra AI Cache chống Cache Stampede
-        ai_cache_key = f"ai_trans:{text_input}"
-        cached_data = cache.get(ai_cache_key)
-
-        if cached_data:
-            # KỊCH BẢN A: Tác vụ đã hoàn tất và có dữ liệu phản hồi
-            if cached_data.get('status') == 'success':
-                return Response(cached_data['result'])
-                
-            # KỊCH BẢN B: Tác vụ đang được xử lý (Cơ chế ngăn chặn Cache Stampede)
-            if cached_data.get('status') == 'processing':
-                # Trả về task_id hiện tại để Frontend tiếp tục quá trình Polling
-                return Response({"task_id": cached_data['task_id']}, status=202)
-
-        # Đẩy vào Celery queue_core và lấy task_id ngay lập tức
-        task = translate_pure_text_task.apply_async(
-            args=[text_input], 
-            queue='queue_core'
+        from .tasks import translate_pure_text_task
+        return AIFallbackGateway.handle_translation_fallback(
+            request=request,
+            task_func=translate_pure_text_task,
+            cache_key_prefix="ai_trans",
+            mode='zh'
         )
-        
-        # THIẾT LẬP CỜ TRẠNG THÁI TRÊN REDIS (Sử dụng thời gian sống ngắn, ví dụ: 5 phút)
-        cache.set(ai_cache_key, {"status": "processing", "task_id": task.id}, timeout=5 * 60)
-        
-        return Response({
-            "status": "PENDING",
-            "task_id": task.id
-        }, status=status.HTTP_202_ACCEPTED)
 
 class TranslationStatusView(APIView):
     throttle_classes = []
