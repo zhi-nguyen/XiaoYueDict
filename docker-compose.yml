@@ -304,6 +304,18 @@ services:
     networks:
       - xiaoyue-network
 
+  # ── PDF Render Service ──
+  pdf-service:
+    build:
+      context: ./pdf_service
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./pdf_service:/app
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
 # ── Volumes ──
 volumes:
   postgres_data:

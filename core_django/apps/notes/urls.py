@@ -5,12 +5,14 @@ from .views import (
     WordListCreateView,
     WordDetailView,
     DictionaryLookupView,
+    NotebookExportPDFView,
 )
 
 urlpatterns = [
     # Notebook CRUD
     path('notebooks/', NotebookListCreateView.as_view(), name='notebook_list_create'),
     path('notebooks/<int:notebook_id>/', NotebookDetailView.as_view(), name='notebook_detail'),
+    path('notebooks/<int:notebook_id>/export-pdf/', NotebookExportPDFView.as_view(), name='notebook_export_pdf'),
 
     # Word CRUD (nested under notebook)
     path('notebooks/<int:notebook_id>/words/', WordListCreateView.as_view(), name='word_list_create'),
