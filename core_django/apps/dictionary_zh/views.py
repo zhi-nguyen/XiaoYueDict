@@ -60,11 +60,19 @@ class ZhWordSearchView(generics.ListAPIView):
 
             if 2 <= query_len <= 100:
                 from .models import ZhExample
-                cleaned_query = re.sub(r'[。，、！？. , ! ?]+$', '', query)
-                regex_pattern = r'^' + re.escape(cleaned_query) + r'[。，、！？. , ! ?]*$'
+                cleaned_query_end = re.sub(r'[。，、！？. , ! ?]+$', '', query)
+                cleaned_for_search = re.sub(r'[。，、！？. , ! ? : ： ; ； ( ) （ ） \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
+                regex_pattern = r'^' + re.escape(cleaned_query_end) + r'[。，、！？. , ! ?]*$'
+                
+                # Check Chinese field
                 match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
-                if not match:
-                    match = ZhExample.objects.filter(chinese__contains=cleaned_query).first()
+                if not match and cleaned_for_search:
+                    match = ZhExample.objects.filter(chinese__icontains=cleaned_for_search).first()
+                
+                # Check Vietnamese field (Utilizes GIN Trigram index)
+                if not match and cleaned_for_search:
+                    match = ZhExample.objects.filter(vietnamese__icontains=cleaned_for_search).first()
+                
                 if match:
                     exact_example = {
                         'chinese': match.chinese,
@@ -119,7 +127,10 @@ class ZhWordSearchView(generics.ListAPIView):
         if hsk:
             queryset = queryset.filter(hsk_level=hsk)
             
-        if not query:
+        # Clean query: strip Chinese and English punctuation
+        cleaned_query = re.sub(r'[。，、！？. , ! ? : ： ; ； ( ) （ ） \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
+            
+        if not cleaned_query:
             # If no query but HSK is provided, just return paginated results ordered by popularity
             return queryset.annotate(
                 adjusted_rank=Case(
@@ -129,29 +140,31 @@ class ZhWordSearchView(generics.ListAPIView):
                 )
             ).order_by('adjusted_rank')
 
-        q_lower = query.lower()
+        q_lower = cleaned_query.lower()
         
         # Tokenize query for FTS Search
-        tokenized_query = " ".join(jieba.cut(query))
+        tokenized_query = " ".join(jieba.cut(cleaned_query))
         query_obj = SearchQuery(tokenized_query, config='simple')
         
         # 0. Subquery to check for example match without causing joins
         has_example_match = Exists(
-            ZhExample.objects.filter(word=OuterRef('pk'), search_vector=query_obj)
+            ZhExample.objects.filter(word_id=OuterRef('pk')).filter(
+                Q(chinese__icontains=cleaned_query) | Q(vietnamese__icontains=cleaned_query)
+            )
         )
         
         # 1. Annotate word length and reverse match index
         queryset = queryset.annotate(
             word_len=Length('word'),
-            word_idx=StrIndex(Value(query), F('word'))
+            word_idx=StrIndex(Value(cleaned_query), F('word'))
         )
         
         # 2. Comprehensive search logic covering all cases
         queryset = queryset.annotate(
             match_level=Case(
-                When(Q(word__exact=query) | Q(traditional__exact=query), then=Value(1)),
+                When(Q(word__exact=cleaned_query) | Q(traditional__exact=cleaned_query), then=Value(1)),
                 When(Q(toneless_pinyin__iexact=q_lower) | Q(pinyin__iexact=q_lower), then=Value(2)),
-                When(Q(word__startswith=query) | Q(traditional__startswith=query), then=Value(3)),
+                When(Q(word__startswith=cleaned_query) | Q(traditional__startswith=cleaned_query), then=Value(3)),
                 When(Q(toneless_pinyin__istartswith=q_lower) | Q(pinyin__istartswith=q_lower), then=Value(4)),
                 When(Q(translation_en__iexact=q_lower) | Q(han_viet__iexact=q_lower), then=Value(5)),
                 When(Q(translation_vi__icontains=q_lower) | Q(han_viet__icontains=q_lower) | Q(translation_en__icontains=q_lower), then=Value(6)),
@@ -177,7 +190,7 @@ class ZhWordSearchView(generics.ListAPIView):
         )
 
         # 4. Filter and Distinct
-        if len(query) >= 2:
+        if len(cleaned_query) >= 2:
             queryset = queryset.filter(match_level__lte=8).distinct()
         else:
             queryset = queryset.filter(match_level__lte=7).distinct()

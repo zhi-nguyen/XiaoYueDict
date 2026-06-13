@@ -64,6 +64,7 @@ class ZhExample(models.Model):
     class Meta:
         indexes = [
             GinIndex(fields=['search_vector'], name='zhexample_search_vector_gin'),
+            GinIndex(fields=['vietnamese'], name='zh_matching_vi_trgm_idx', opclasses=['gin_trgm_ops']),
         ]
 
     def __str__(self):
