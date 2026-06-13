@@ -117,6 +117,14 @@ class AssessmentStatusView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # IDOR Protection
+        if task.user is not None:
+            if not request.user.is_authenticated or task.user != request.user:
+                return Response(
+                    {'error': 'Permission denied. This task belongs to another user.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
         serializer = AssessmentTaskSerializer(task)
         return Response(serializer.data, status=status.HTTP_200_OK)
 

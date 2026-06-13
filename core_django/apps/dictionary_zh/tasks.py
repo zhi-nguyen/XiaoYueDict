@@ -1,12 +1,13 @@
 import os
 import re
 from celery import shared_task
+from celery.exceptions import Retry
 from .models import ZhExample
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=5)
+@shared_task(bind=True, max_retries=5, default_retry_delay=5)
 def translate_pure_text_task(self, text_input):
     """
-    Celery task to handle async translation via Database lookup or Vertex AI / Gemini.
+    Celery task to handle async translation via Database lookup or Vertex AI Priority PayGo.
     """
     # Normalize text as requested by user
     q_lower = text_input.lower().strip()
@@ -25,35 +26,40 @@ def translate_pure_text_task(self, text_input):
             'status': 'SUCCESS'
         }
 
-    # Tầng 2: Gọi AI Fallback (Gemini/GCP API)
+    # Tầng 2: Gọi AI (Vertex AI Priority PayGo)
     system_prompt = "Bạn là một chuyên gia dịch thuật tiếng Trung sang tiếng Việt. Hãy dịch một cách mượt mà và tự nhiên nhất, chỉ trả về kết quả, không giải thích gì thêm."
     
     try:
         translated_text = None
         
         try:
-            # Attempt Vertex AI
-            import vertexai
-            from vertexai.generative_models import GenerativeModel
-            vertexai.init()
-            model = GenerativeModel(
-                'gemini-2.5-flash',
-                system_instruction=[system_prompt]
-            )
-            response = model.generate_content(q_lower)
-            translated_text = response.text.strip()
-        except Exception as e:
-            print(f"Vertex AI failed in celery: {e}")
-            # Fallback to standard Gemini API
-            import google.generativeai as genai
-            api_key = os.environ.get('GEMINI_API_KEY', '')
-            if not api_key:
-                raise Exception('No API keys configured for translation')
+            from google import genai
+            from google.genai import errors
             
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=system_prompt)
-            response = model.generate_content(q_lower)
+            client = genai.Client(
+                vertexai=True,
+                http_options={
+                    'headers': {
+                        'X-Vertex-AI-LLM-Shared-Request-Type': 'priority'
+                    }
+                }
+            )
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=q_lower,
+                config={
+                    'system_instruction': system_prompt
+                }
+            )
             translated_text = response.text.strip()
+        except errors.APIError as e:
+            # Catch 429 Resource Exhausted / Rate limits to trigger Celery retry
+            if e.code == 429 or "429" in str(e) or "ResourceExhausted" in str(e):
+                import random
+                countdown = (2 ** self.request.retries) + random.randint(1, 3)
+                print(f"Vertex AI got 429, retrying task in {countdown}s (retry {self.request.retries})...")
+                raise self.retry(exc=e, countdown=countdown)
+            raise e
             
         if translated_text:
             from django.core.cache import cache
@@ -68,9 +74,12 @@ def translate_pure_text_task(self, text_input):
         else:
             raise Exception('Empty response from AI')
             
+    except Retry:
+        raise
     except Exception as e:
         print(f"Translation Task Error: {e}")
         return {
             'error': f'Dịch vụ dịch thuật tạm thời không khả dụng. Chi tiết: {str(e)}',
             'status': 'FAILED'
         }
+
