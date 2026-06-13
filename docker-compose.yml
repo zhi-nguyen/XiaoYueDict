@@ -24,11 +24,6 @@ services:
         condition: service_started
       ai-service-zh:
         condition: service_started
-    deploy:
-      resources:
-        limits:
-          cpus: "0.25"
-          memory: 256M
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -41,11 +36,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-    deploy:
-      resources:
-        limits:
-          cpus: "0.50"
-          memory: 1G
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -62,11 +52,6 @@ services:
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
     env_file:
       - .env
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 1G
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -89,11 +74,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: "1.25"
-          memory: 2816M
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -106,6 +86,7 @@ services:
   core-django:
     build:
       context: ./core_django
+    command: ["gunicorn", "core_project.wsgi:application", "--bind", "0.0.0.0:8080", "--workers", "3", "--worker-class", "gthread", "--threads", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-"]
     depends_on:
       redis:
         condition: service_healthy
@@ -124,11 +105,6 @@ services:
       - django_static:/app/staticfiles
       - django_media:/app/media
       - D:/XiaoYueDict_data:/data
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 3G
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -137,7 +113,7 @@ services:
   celery-worker-core:
     build:
       context: ./core_django
-    command: celery -A core_project worker -Q queue_core --loglevel=info --concurrency=4
+    command: celery -A core_project worker -Q queue_core --loglevel=info --concurrency=2
     depends_on:
       redis:
         condition: service_healthy
@@ -153,11 +129,6 @@ services:
       - ./core_django:/app
       - django_media:/app/media
       - D:/XiaoYueDict_data:/data
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 2G
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -180,59 +151,29 @@ services:
       - .env
     volumes:
       - ./core_django:/app
-    deploy:
-      resources:
-        limits:
-          cpus: "0.2"
-          memory: 512M
     restart: unless-stopped
     networks:
       - xiaoyue-network
 
-  # ── Celery Worker (AI English Audio) ──
-  celery-worker-ai-en:
+  # ── Celery Worker (Priority - Paid Queue) ──
+  celery-worker-priority:
     build:
       context: ./core_django
-    command: celery -A core_project worker -Q queue_ai_en --loglevel=info --concurrency=1
+    command: celery -A core_project worker -Q queue_paid --loglevel=info --concurrency=1
     depends_on:
       redis:
         condition: service_healthy
       core-django:
+        condition: service_started
+      ai-service-en:
+        condition: service_started
+      ai-service-zh:
         condition: service_started
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
       - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL:-http://ai-service-en:8000/api/v1/score}
-    env_file:
-      - .env
-    volumes:
-      - ./core_django:/app
-      - django_media:/app/media
-      - D:/XiaoYueDict_data:/data
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 1G
-    restart: unless-stopped
-    networks:
-      - xiaoyue-network
-
-  # ── Celery Worker (AI Chinese Audio) ──
-  celery-worker-ai-zh:
-    build:
-      context: ./core_django
-    command: celery -A core_project worker -Q queue_ai_zh --loglevel=info --concurrency=1
-    depends_on:
-      redis:
-        condition: service_healthy
-      core-django:
-        condition: service_started
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
       - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL:-http://ai-service-zh:8001/api/v1/score}
     env_file:
       - .env
@@ -240,11 +181,66 @@ services:
       - ./core_django:/app
       - django_media:/app/media
       - D:/XiaoYueDict_data:/data
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 1G
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── Celery Worker (Standard - Paid & Free Queues) ──
+  celery-worker-standard:
+    build:
+      context: ./core_django
+    command: celery -A core_project worker -Q queue_paid,queue_free --loglevel=info --concurrency=1
+    depends_on:
+      redis:
+        condition: service_healthy
+      core-django:
+        condition: service_started
+      ai-service-en:
+        condition: service_started
+      ai-service-zh:
+        condition: service_started
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL:-http://ai-service-en:8000/api/v1/score}
+      - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL:-http://ai-service-zh:8001/api/v1/score}
+    env_file:
+      - .env
+    volumes:
+      - ./core_django:/app
+      - django_media:/app/media
+      - D:/XiaoYueDict_data:/data
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── Celery Worker (Guest - Guest & Free Queues - Anti-starvation) ──
+  celery-worker-guest:
+    build:
+      context: ./core_django
+    command: celery -A core_project worker -Q queue_guest,queue_free --loglevel=info --concurrency=1
+    depends_on:
+      redis:
+        condition: service_healthy
+      core-django:
+        condition: service_started
+      ai-service-en:
+        condition: service_started
+      ai-service-zh:
+        condition: service_started
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL:-http://ai-service-en:8000/api/v1/score}
+      - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL:-http://ai-service-zh:8001/api/v1/score}
+    env_file:
+      - .env
+    volumes:
+      - ./core_django:/app
+      - django_media:/app/media
+      - D:/XiaoYueDict_data:/data
     restart: unless-stopped
     networks:
       - xiaoyue-network
@@ -266,9 +262,6 @@ services:
       start_period: 180s
     deploy:
       resources:
-        limits:
-          cpus: "4.0"
-          memory: 6G
         reservations:
           devices:
             - driver: nvidia
@@ -291,9 +284,9 @@ services:
       - ONNX_MODEL_PATH=/app/model/pronunciation_scorer_fp16.onnx
       - WHISPER_MODEL_SIZE=base.en
       - WHISPER_CACHE_DIR=/app/model/whisper_cache
-      - ORT_INTRA_OP_THREADS=4
+      - ORT_INTRA_OP_THREADS=2
       - ORT_INTER_OP_THREADS=1
-      - OMP_NUM_THREADS=4
+      - OMP_NUM_THREADS=2
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
       interval: 30s
@@ -302,15 +295,24 @@ services:
       start_period: 120s
     deploy:
       resources:
-        limits:
-          cpus: "4.0"
-          memory: 6G
         reservations:
           devices:
             - driver: nvidia
               count: 1
               capabilities: [ gpu ]
     restart: always
+    networks:
+      - xiaoyue-network
+
+  # ── PDF Render Service ──
+  pdf-service:
+    build:
+      context: ./pdf_service
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./pdf_service:/app
+    restart: unless-stopped
     networks:
       - xiaoyue-network
 

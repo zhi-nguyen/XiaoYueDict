@@ -1,4 +1,5 @@
 from django.db import models
+from django.conf import settings
 
 
 class Notebook(models.Model):
@@ -6,10 +7,19 @@ class Notebook(models.Model):
     Sổ tay từ vựng — mỗi sổ chỉ cần một tên.
     Người dùng có thể tạo nhiều sổ.
     """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='notebooks',
+        verbose_name='Người sở hữu',
+        null=True,
+        blank=True
+    )
     name = models.CharField(max_length=255, verbose_name='Tên sổ')
     description = models.TextField(blank=True, default='', verbose_name='Mô tả')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
 
     class Meta:
         ordering = ['-updated_at']

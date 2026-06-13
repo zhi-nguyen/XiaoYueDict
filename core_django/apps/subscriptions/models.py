@@ -52,10 +52,18 @@ class UserSubscription(models.Model):
 
     def check_validity(self):
         if self.tier != 'Free' and self.end_date and self.end_date < timezone.now():
-            self.tier = 'Free'
-            self.is_active = False
-            self.save()
-            return False
+            from django.db import transaction
+            with transaction.atomic():
+                # Thực hiện khóa hàng PostgreSQL bằng QuerySet thông qua select_for_update()
+                locked_sub = UserSubscription.objects.select_for_update().get(pk=self.pk)
+                if locked_sub.tier != 'Free' and locked_sub.end_date and locked_sub.end_date < timezone.now():
+                    locked_sub.tier = 'Free'
+                    locked_sub.is_active = False
+                    locked_sub.save()
+                    # Đồng bộ hóa lại trạng thái instance hiện tại
+                    self.tier = 'Free'
+                    self.is_active = False
+                    return False
         return True
 
     @property

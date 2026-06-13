@@ -11,6 +11,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from django.core.cache import cache
 from .models import Exam, Section, Question, Option
 from .serializers import ExamSerializer, ExamListSerializer
+from .throttles import UniqueExamAccessThrottle
 
 
 class ExamViewSet(viewsets.ReadOnlyModelViewSet):
@@ -19,7 +20,7 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
     """
     queryset = Exam.objects.filter(status=1).order_by('level', 'created_at')
     permission_classes = [permissions.AllowAny]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [ScopedRateThrottle, UniqueExamAccessThrottle]
 
     @property
     def throttle_scope(self):

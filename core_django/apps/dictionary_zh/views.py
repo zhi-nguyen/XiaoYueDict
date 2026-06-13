@@ -4,11 +4,39 @@ from rest_framework.response import Response
 from django.db.models import Q, Case, When, Value, IntegerField, F, Exists, OuterRef
 from django.contrib.postgres.search import SearchQuery
 from django.db.models.functions import Length, StrIndex
+from django.core.cache import cache
 
 from .models import ZhWord, ZhExample
 from .serializers import ZhWordSerializer
+from apps.ai_gateway import AIFallbackGateway
 import re
 import jieba
+
+def get_client_ip(request):
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        return x_forwarded_for.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR', 'anonymous')
+
+def get_translation_char_limit(user):
+    if not user or not user.is_authenticated:
+        return 150  # GUEST limit is 150 characters
+    try:
+        tier = user.subscription.tier if hasattr(user, 'subscription') else 'Free'
+    except Exception:
+        tier = 'Free'
+        
+    tier = tier.lower()
+    if tier == 'plus':
+        return 1000
+    elif tier == 'pro':
+        return 2000
+    elif tier == 'premium':
+        return 3000
+    else: # free
+        return 500
+
+
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 20
@@ -20,33 +48,61 @@ class ZhWordSearchView(generics.ListAPIView):
     pagination_class = StandardResultsSetPagination
 
     def list(self, request, *args, **kwargs):
-        queryset = self.filter_queryset(self.get_queryset())
         query = self.request.query_params.get('q', '').strip()
-        
-        exact_example = None
-        query_len = len(query)
-        
-        # Chỉ quét ví dụ nếu độ dài hợp lý (từ 2 đến 100 ký tự)
-        if 2 <= query_len <= 100:
-            from .models import ZhExample
-            
-            # Làm sạch dấu câu ở cuối chuỗi truy vấn (nếu có)
-            cleaned_query = re.sub(r'[。，、！？. , ! ?]+$', '', query)
-            
-            # 1. Thử tìm khớp chính xác hoàn toàn trước (cho phép dấu câu tùy chọn ở cuối)
-            regex_pattern = r'^' + re.escape(cleaned_query) + r'[。，、！？. , ! ?]*$'
-            match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
-            
-            # 2. Nếu không khớp hoàn toàn, mới dùng contains (Quét chuỗi)
-            if not match:
-                match = ZhExample.objects.filter(chinese__contains=cleaned_query).first()
+        from .tasks import translate_pure_text_task
+
+        db_shared_container = {}
+
+        def db_lookup():
+            queryset = self.filter_queryset(self.get_queryset())
+            exact_example = None
+            query_len = len(query)
+
+            if 2 <= query_len <= 100:
+                from .models import ZhExample
+                cleaned_query_end = re.sub(r'[。，、！？. , ! ?]+$', '', query)
+                cleaned_for_search = re.sub(r'[。，、！？. , ! ? : ： ; ； ( ) （ ） \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
+                regex_pattern = r'^' + re.escape(cleaned_query_end) + r'[。，、！？. , ! ?]*$'
                 
-            if match:
-                exact_example = {
-                    'chinese': match.chinese,
-                    'pinyin': match.pinyin,
-                    'vietnamese': match.vietnamese
-                }
+                # Check Chinese field
+                match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
+                if not match and cleaned_for_search:
+                    match = ZhExample.objects.filter(chinese__icontains=cleaned_for_search).first()
+                
+                # Check Vietnamese field (Utilizes GIN Trigram index)
+                if not match and cleaned_for_search:
+                    match = ZhExample.objects.filter(vietnamese__icontains=cleaned_for_search).first()
+                
+                if match:
+                    exact_example = {
+                        'chinese': match.chinese,
+                        'pinyin': match.pinyin,
+                        'vietnamese': match.vietnamese
+                    }
+
+            has_data = queryset.exists() or (exact_example is not None)
+            if has_data:
+                db_shared_container['queryset'] = queryset
+                db_shared_container['exact_example'] = exact_example
+                return True
+            return False
+
+        # Ủy thác phòng thủ cho Gateway dùng chung (Chế độ tiếng Trung)
+        gateway_response = AIFallbackGateway.handle_search_fallback(
+            request=request,
+            query=query,
+            db_lookup_func=db_lookup,
+            task_func=translate_pure_text_task,
+            cache_key_prefix="ai_trans",
+            mode='zh'
+        )
+
+        if gateway_response:
+            return gateway_response
+
+        # Phục hồi dữ liệu từ Closure, triệt tiêu Double Query!
+        queryset = db_shared_container['queryset']
+        exact_example = db_shared_container['exact_example']
 
         page = self.paginate_queryset(queryset)
         if page is not None:
@@ -60,6 +116,7 @@ class ZhWordSearchView(generics.ListAPIView):
             'results': serializer.data
         })
 
+
     def get_queryset(self):
         query = self.request.query_params.get('q', '').strip()
         hsk = self.request.query_params.get('hsk', '').strip()
@@ -70,7 +127,10 @@ class ZhWordSearchView(generics.ListAPIView):
         if hsk:
             queryset = queryset.filter(hsk_level=hsk)
             
-        if not query:
+        # Clean query: strip Chinese and English punctuation
+        cleaned_query = re.sub(r'[。，、！？. , ! ? : ： ; ； ( ) （ ） \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
+            
+        if not cleaned_query:
             # If no query but HSK is provided, just return paginated results ordered by popularity
             return queryset.annotate(
                 adjusted_rank=Case(
@@ -80,29 +140,31 @@ class ZhWordSearchView(generics.ListAPIView):
                 )
             ).order_by('adjusted_rank')
 
-        q_lower = query.lower()
+        q_lower = cleaned_query.lower()
         
         # Tokenize query for FTS Search
-        tokenized_query = " ".join(jieba.cut(query))
+        tokenized_query = " ".join(jieba.cut(cleaned_query))
         query_obj = SearchQuery(tokenized_query, config='simple')
         
         # 0. Subquery to check for example match without causing joins
         has_example_match = Exists(
-            ZhExample.objects.filter(word=OuterRef('pk'), search_vector=query_obj)
+            ZhExample.objects.filter(word_id=OuterRef('pk')).filter(
+                Q(chinese__icontains=cleaned_query) | Q(vietnamese__icontains=cleaned_query)
+            )
         )
         
         # 1. Annotate word length and reverse match index
         queryset = queryset.annotate(
             word_len=Length('word'),
-            word_idx=StrIndex(Value(query), F('word'))
+            word_idx=StrIndex(Value(cleaned_query), F('word'))
         )
         
         # 2. Comprehensive search logic covering all cases
         queryset = queryset.annotate(
             match_level=Case(
-                When(Q(word__exact=query) | Q(traditional__exact=query), then=Value(1)),
+                When(Q(word__exact=cleaned_query) | Q(traditional__exact=cleaned_query), then=Value(1)),
                 When(Q(toneless_pinyin__iexact=q_lower) | Q(pinyin__iexact=q_lower), then=Value(2)),
-                When(Q(word__startswith=query) | Q(traditional__startswith=query), then=Value(3)),
+                When(Q(word__startswith=cleaned_query) | Q(traditional__startswith=cleaned_query), then=Value(3)),
                 When(Q(toneless_pinyin__istartswith=q_lower) | Q(pinyin__istartswith=q_lower), then=Value(4)),
                 When(Q(translation_en__iexact=q_lower) | Q(han_viet__iexact=q_lower), then=Value(5)),
                 When(Q(translation_vi__icontains=q_lower) | Q(han_viet__icontains=q_lower) | Q(translation_en__icontains=q_lower), then=Value(6)),
@@ -128,7 +190,7 @@ class ZhWordSearchView(generics.ListAPIView):
         )
 
         # 4. Filter and Distinct
-        if len(query) >= 2:
+        if len(cleaned_query) >= 2:
             queryset = queryset.filter(match_level__lte=8).distinct()
         else:
             queryset = queryset.filter(match_level__lte=7).distinct()
@@ -150,20 +212,13 @@ class PureTextTranslationView(APIView):
     throttle_classes = [AnonRateThrottle, UserRateThrottle]
 
     def post(self, request):
-        text_input = request.data.get("text", "").strip()
-        if not text_input:
-            return Response({'error': 'No text provided'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Đẩy vào Celery queue_core và lấy task_id ngay lập tức
-        task = translate_pure_text_task.apply_async(
-            args=[text_input], 
-            queue='queue_core'
+        from .tasks import translate_pure_text_task
+        return AIFallbackGateway.handle_translation_fallback(
+            request=request,
+            task_func=translate_pure_text_task,
+            cache_key_prefix="ai_trans",
+            mode='zh'
         )
-        
-        return Response({
-            "status": "PENDING",
-            "task_id": task.id
-        }, status=status.HTTP_202_ACCEPTED)
 
 class TranslationStatusView(APIView):
     throttle_classes = []

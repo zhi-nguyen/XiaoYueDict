@@ -14,3 +14,4 @@ djangorestframework-simplejwt
 Pillow
 PyJWT>=2.8
 jieba
+google-genai

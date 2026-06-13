@@ -16,6 +16,12 @@ class AssessmentTask(models.Model):
         ('FAILED', 'Failed'),
     ]
 
+    QUEUE_CHOICES = [
+        ('queue_paid', 'Paid Queue'),
+        ('queue_free', 'Free Queue'),
+        ('queue_guest', 'Guest Queue'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -29,6 +35,13 @@ class AssessmentTask(models.Model):
     target_text = models.TextField(blank=True, default='')
     language = models.CharField(max_length=5, choices=LANGUAGE_CHOICES, default='en')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    queue_name = models.CharField(
+        max_length=20,
+        choices=QUEUE_CHOICES,
+        default='queue_guest',
+        db_index=True,
+        help_text="The physical queue in Redis/Celery that this task is routed to",
+    )
     score = models.FloatField(null=True, blank=True)
     result_data = models.JSONField(null=True, blank=True)
     error_message = models.TextField(blank=True, default='')
