@@ -33,6 +33,12 @@ def ws_notify(user_id, event_type: str, title: str, payload: dict = None):
     1. Saves the notification to PostgreSQL (apps.notifications.Notification)
     2. Publishes to Redis Pub/Sub channel 'ws:notifications'
 
+    ⚠️  USAGE CONTRACT:
+        Hàm này thực hiện BLOCKING I/O (DB write + Redis publish).
+        CHỈ được gọi từ Celery tasks hoặc management commands.
+        TUYỆT ĐỐI KHÔNG gọi trực tiếp từ Django views/serializers
+        vì sẽ block Gunicorn worker thread và giảm throughput hệ thống.
+
     Args:
         user_id: The user's database PK (int or str). If None, skip.
         event_type: One of the Notification.NOTIFICATION_TYPES values.
@@ -41,6 +47,18 @@ def ws_notify(user_id, event_type: str, title: str, payload: dict = None):
     """
     if not user_id:
         return  # No user to notify
+
+    # Guard: Cảnh báo nếu gọi từ ngoài Celery worker context
+    try:
+        from celery import current_task
+        if current_task is None:
+            logger.warning(
+                "⚠️ ws_notify() được gọi từ NGOÀI Celery worker context. "
+                "Điều này có thể block request thread. "
+                f"Event: {event_type}, User: {user_id}"
+            )
+    except ImportError:
+        pass
 
     if payload is None:
         payload = {}
@@ -71,3 +89,4 @@ def ws_notify(user_id, event_type: str, title: str, payload: dict = None):
         get_redis_client().publish("ws:notifications", message)
     except Exception as e:
         logger.error(f"Failed to publish WS notification to Redis: {e}")
+

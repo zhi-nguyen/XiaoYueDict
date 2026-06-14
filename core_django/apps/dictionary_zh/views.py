@@ -12,31 +12,6 @@ from apps.ai_gateway import AIFallbackGateway
 import re
 import jieba
 
-def get_client_ip(request):
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        return x_forwarded_for.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR', 'anonymous')
-
-def get_translation_char_limit(user):
-    if not user or not user.is_authenticated:
-        return 150  # GUEST limit is 150 characters
-    try:
-        tier = user.subscription.tier if hasattr(user, 'subscription') else 'Free'
-    except Exception:
-        tier = 'Free'
-        
-    tier = tier.lower()
-    if tier == 'plus':
-        return 1000
-    elif tier == 'pro':
-        return 2000
-    elif tier == 'premium':
-        return 3000
-    else: # free
-        return 500
-
-
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 20

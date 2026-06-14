@@ -5,7 +5,6 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Count, Q
 from rest_framework.permissions import IsAuthenticated
 from django.http import FileResponse
-import requests
 import datetime
 from django.utils import timezone
 from django.core.cache import cache
