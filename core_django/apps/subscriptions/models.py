@@ -120,7 +120,9 @@ class VolumeLimitConfig(models.Model):
     mb_per_minute = models.PositiveIntegerField(default=2)
     mb_per_hour = models.PositiveIntegerField(default=20)
     mb_per_day = models.PositiveIntegerField(default=100)
+    pdf_daily_limit = models.PositiveIntegerField(default=2, help_text="Số lần xuất PDF tối đa mỗi ngày")
+    pdf_word_limit = models.PositiveIntegerField(default=10, help_text="Số từ vựng tối đa mỗi file PDF")
 
     def __str__(self):
-        return f"Config {self.tier}: {self.mb_per_minute}MB/m, {self.mb_per_hour}MB/h, {self.mb_per_day}MB/d"
+        return f"Config {self.tier}: {self.mb_per_minute}MB/m, {self.mb_per_hour}MB/h, {self.mb_per_day}MB/d, PDF: {self.pdf_daily_limit} times/day, {self.pdf_word_limit} words/file"
 

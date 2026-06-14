@@ -16,6 +16,8 @@ class Notification(models.Model):
         ('subscription_change', 'Subscription Change'),
         ('achievement', 'Achievement'),
         ('system', 'System Message'),
+        ('pdf_complete', 'PDF Export Complete'),
+        ('pdf_failed', 'PDF Export Failed'),
     ]
 
     user = models.ForeignKey(
