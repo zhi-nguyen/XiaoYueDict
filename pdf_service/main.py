@@ -350,8 +350,10 @@ class NumberedCanvas(canvas.Canvas):
         
         # 1. Header (Notebook Title & App Name)
         notebook_title = getattr(self, "notebook_title", "Sổ tay tập viết")
+        branding_name = getattr(self, "branding_name", "XiaoYue Dict")
         self.drawString(x_left, 29.7 * cm - 3.5 * cm + 0.25 * cm, f"Sổ tay: {notebook_title}")
-        self.drawRightString(x_right, 29.7 * cm - 3.5 * cm + 0.25 * cm, "XiaoYue Dict")
+        if branding_name:
+            self.drawRightString(x_right, 29.7 * cm - 3.5 * cm + 0.25 * cm, branding_name)
         
         # Header separator line
         self.setStrokeColor(colors.HexColor('#E0E0E0'))
@@ -382,6 +384,7 @@ class OptionsModel(BaseModel):
     show_meaning: Optional[bool] = True
     show_notes: Optional[bool] = True
     show_cover: Optional[bool] = True
+    branding_name: Optional[str] = "XiaoYue Dict"
     extra_rows: Optional[int] = 0
     empty_pages: Optional[int] = 0
     empty_page_grid_size: Optional[str] = "auto"
@@ -487,11 +490,13 @@ def generate_pdf(req: GenerateRequest):
             story.append(Paragraph("(Ôn lại việc cũ để hiểu biết thêm việc mới)", styles['CoverSubtitle']))
             
             story.append(Spacer(1, 4*cm))
+            branding_name = req.options.branding_name
+            branding_line = f"{branding_name}<br/>" if branding_name else ""
             metadata_html = f"""
             <b>Sổ tay:</b> {req.title}<br/>
             <b>Số lượng từ:</b> {len(req.words)} từ vựng<br/>
             <b>Ngày tạo:</b> {datetime.now().strftime('%d/%m/%Y')}<br/>
-            <b>Nền tảng:</b> XiaoYue Dict
+            {branding_line}
             """
             story.append(Paragraph(metadata_html, styles['CoverMetadata']))
             story.append(PageBreak())
@@ -762,6 +767,7 @@ def generate_pdf(req: GenerateRequest):
         def on_init(canvas_obj, doc_obj):
             canvas_obj.show_cover = req.options.show_cover
             canvas_obj.notebook_title = req.title
+            canvas_obj.branding_name = req.options.branding_name
             
         doc.build(story, canvasmaker=NumberedCanvas, onFirstPage=on_init, onLaterPages=on_init)
         

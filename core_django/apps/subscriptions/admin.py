@@ -26,7 +26,7 @@ class SubscriptionHistoryAdmin(admin.ModelAdmin):
 
 @admin.register(VolumeLimitConfig)
 class VolumeLimitConfigAdmin(admin.ModelAdmin):
-    list_display = ('tier', 'mb_per_minute', 'mb_per_hour', 'mb_per_day')
+    list_display = ('tier', 'mb_per_minute', 'mb_per_hour', 'mb_per_day', 'pdf_daily_limit', 'pdf_word_limit')
     list_filter = ('tier',)
     search_fields = ('tier',)
 

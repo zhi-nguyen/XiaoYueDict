@@ -12,31 +12,6 @@ from apps.ai_gateway import AIFallbackGateway
 import re
 import jieba
 
-def get_client_ip(request):
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        return x_forwarded_for.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR', 'anonymous')
-
-def get_translation_char_limit(user):
-    if not user or not user.is_authenticated:
-        return 150  # GUEST limit is 150 characters
-    try:
-        tier = user.subscription.tier if hasattr(user, 'subscription') else 'Free'
-    except Exception:
-        tier = 'Free'
-        
-    tier = tier.lower()
-    if tier == 'plus':
-        return 1000
-    elif tier == 'pro':
-        return 2000
-    elif tier == 'premium':
-        return 3000
-    else: # free
-        return 500
-
-
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 20
@@ -53,52 +28,67 @@ class ZhWordSearchView(generics.ListAPIView):
 
         db_shared_container = {}
 
-        def db_lookup():
+        # Check if fallback is disabled
+        fallback_param = request.query_params.get('fallback', 'true').lower() == 'true'
+
+        if fallback_param:
+            is_chinese = bool(re.search(r'[\u4e00-\u9fa5]', query))
+
+            def db_lookup():
+                queryset = self.filter_queryset(self.get_queryset())
+                exact_example = None
+                query_len = len(query)
+
+                if 2 <= query_len <= 100:
+                    from .models import ZhExample
+                    cleaned_query_end = re.sub(r'[。，、！？. , ! ?]+$', '', query)
+                    cleaned_for_search = re.sub(r'[。，、！？. , ! ? : ： ; ； ( ) （ ） \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
+                    regex_pattern = r'^' + re.escape(cleaned_query_end) + r'[。，、！？. , ! ?]*$'
+                    
+                    # Check Chinese field
+                    match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
+                    if not match and cleaned_for_search:
+                        match = ZhExample.objects.filter(chinese__icontains=cleaned_for_search).first()
+                    
+                    # Check Vietnamese field (Utilizes GIN Trigram index)
+                    if not match and cleaned_for_search:
+                        match = ZhExample.objects.filter(vietnamese__icontains=cleaned_for_search).first()
+                    
+                    if match:
+                        exact_example = {
+                            'chinese': match.chinese,
+                            'pinyin': match.pinyin,
+                            'vietnamese': match.vietnamese
+                        }
+
+                if is_chinese:
+                    has_exact_word = ZhWord.objects.filter(Q(word=query) | Q(traditional=query)).exists()
+                    has_data = has_exact_word or (exact_example is not None)
+                else:
+                    has_data = queryset.exists() or (exact_example is not None)
+
+                if has_data:
+                    db_shared_container['queryset'] = queryset
+                    db_shared_container['exact_example'] = exact_example
+                    return True
+                return False
+
+            # Ủy thác phòng thủ cho Gateway dùng chung (Chế độ tiếng Trung)
+            gateway_response = AIFallbackGateway.handle_search_fallback(
+                request=request,
+                query=query,
+                db_lookup_func=db_lookup,
+                task_func=translate_pure_text_task,
+                cache_key_prefix="ai_trans",
+                mode='zh'
+            )
+
+            if gateway_response:
+                return gateway_response
+        else:
             queryset = self.filter_queryset(self.get_queryset())
-            exact_example = None
-            query_len = len(query)
-
-            if 2 <= query_len <= 100:
-                from .models import ZhExample
-                cleaned_query_end = re.sub(r'[。，、！？. , ! ?]+$', '', query)
-                cleaned_for_search = re.sub(r'[。，、！？. , ! ? : ： ; ； ( ) （ ） \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
-                regex_pattern = r'^' + re.escape(cleaned_query_end) + r'[。，、！？. , ! ?]*$'
-                
-                # Check Chinese field
-                match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
-                if not match and cleaned_for_search:
-                    match = ZhExample.objects.filter(chinese__icontains=cleaned_for_search).first()
-                
-                # Check Vietnamese field (Utilizes GIN Trigram index)
-                if not match and cleaned_for_search:
-                    match = ZhExample.objects.filter(vietnamese__icontains=cleaned_for_search).first()
-                
-                if match:
-                    exact_example = {
-                        'chinese': match.chinese,
-                        'pinyin': match.pinyin,
-                        'vietnamese': match.vietnamese
-                    }
-
-            has_data = queryset.exists() or (exact_example is not None)
-            if has_data:
-                db_shared_container['queryset'] = queryset
-                db_shared_container['exact_example'] = exact_example
-                return True
-            return False
-
-        # Ủy thác phòng thủ cho Gateway dùng chung (Chế độ tiếng Trung)
-        gateway_response = AIFallbackGateway.handle_search_fallback(
-            request=request,
-            query=query,
-            db_lookup_func=db_lookup,
-            task_func=translate_pure_text_task,
-            cache_key_prefix="ai_trans",
-            mode='zh'
-        )
-
-        if gateway_response:
-            return gateway_response
+            db_shared_container['queryset'] = queryset
+            db_shared_container['exact_example'] = None
 
         # Phục hồi dữ liệu từ Closure, triệt tiêu Double Query!
         queryset = db_shared_container['queryset']

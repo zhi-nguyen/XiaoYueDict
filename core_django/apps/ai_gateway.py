@@ -93,7 +93,15 @@ class AIFallbackGateway:
                 )
 
             # Kích hoạt Celery Task dịch thuật
-            task = task_func.apply_async(args=[query], queue='queue_core')
+            user = request.user
+            guest_id = request.data.get("guest_id") or request.query_params.get("guest_id")
+            effective_user_id = str(user.id) if user.is_authenticated else guest_id
+
+            task = task_func.apply_async(
+                args=[query], 
+                kwargs={"user_id": effective_user_id} if effective_user_id else {},
+                queue='queue_core'
+            )
 
             # Thiết lập trạng thái xử lý ngầm (chống Cache Stampede)
             cache.set(ai_cache_key, {"status": "processing", "task_id": task.id}, timeout=5 * 60)
@@ -131,7 +139,15 @@ class AIFallbackGateway:
             if cached_data.get('status') == 'processing':
                 return Response({"task_id": cached_data['task_id']}, status=status.HTTP_202_ACCEPTED)
 
-        task = task_func.apply_async(args=[text_input], queue='queue_core')
+        user = request.user
+        guest_id = request.data.get("guest_id") or request.query_params.get("guest_id")
+        effective_user_id = str(user.id) if user.is_authenticated else guest_id
+
+        task = task_func.apply_async(
+            args=[text_input], 
+            kwargs={"user_id": effective_user_id} if effective_user_id else {},
+            queue='queue_core'
+        )
         cache.set(ai_cache_key, {"status": "processing", "task_id": task.id}, timeout=5 * 60)
         
         return Response({

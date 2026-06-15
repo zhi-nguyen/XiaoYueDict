@@ -3,9 +3,10 @@ import re
 from celery import shared_task
 from celery.exceptions import Retry
 from .models import ZhExample
+from core_project.ws_utils import ws_notify
 
 @shared_task(bind=True, max_retries=5, default_retry_delay=5)
-def translate_pure_text_task(self, text_input):
+def translate_pure_text_task(self, text_input, user_id=None):
     """
     Celery task to handle async translation via Database lookup or Vertex AI Priority PayGo.
     """
@@ -13,18 +14,34 @@ def translate_pure_text_task(self, text_input):
     q_lower = text_input.lower().strip()
     cleaned_query = re.sub(r'[。，、！？. , ! ?]+$', '', q_lower)
     if not cleaned_query:
-        return {'error': 'No valid text provided', 'status': 'FAILED'}
+        result = {'error': 'No valid text provided', 'status': 'FAILED'}
+        if user_id:
+            ws_notify(
+                user_id=user_id,
+                event_type='translation_failed',
+                title='Dịch thuật thất bại',
+                payload={'task_id': self.request.id, 'error': result['error']}
+            )
+        return result
 
     # Tầng 1: Kiểm tra Database (ZhExample)
     # Sử dụng iregex cho phép dấu câu tùy chọn ở cuối
     regex_pattern = r'^' + re.escape(cleaned_query) + r'[。，、！？. , ! ?]*$'
     match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
     if match:
-        return {
+        result = {
             'translatedText': match.vietnamese,
             'source': 'database',
             'status': 'SUCCESS'
         }
+        if user_id:
+            ws_notify(
+                user_id=user_id,
+                event_type='translation_complete',
+                title='Dịch thuật hoàn tất',
+                payload={'task_id': self.request.id, **result}
+            )
+        return result
 
     # Tầng 2: Gọi AI (Vertex AI Priority PayGo)
     system_prompt = "Bạn là một chuyên gia dịch thuật tiếng Trung sang tiếng Việt. Hãy dịch một cách mượt mà và tự nhiên nhất, chỉ trả về kết quả, không giải thích gì thêm."
@@ -33,17 +50,10 @@ def translate_pure_text_task(self, text_input):
         translated_text = None
         
         try:
-            from google import genai
+            from apps.core_shared.ai_client import get_genai_client
             from google.genai import errors
             
-            client = genai.Client(
-                vertexai=True,
-                http_options={
-                    'headers': {
-                        'X-Vertex-AI-LLM-Shared-Request-Type': 'priority'
-                    }
-                }
-            )
+            client = get_genai_client()
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=q_lower,
@@ -70,6 +80,13 @@ def translate_pure_text_task(self, text_input):
             }
             # Lưu trữ kết quả AI dịch thuật thành công dài hạn (7 ngày) chống lặp cuộc gọi LLM
             cache.set(f"ai_trans:{text_input}", {"status": "success", "result": result_data}, timeout=7 * 24 * 60 * 60)
+            if user_id:
+                ws_notify(
+                    user_id=user_id,
+                    event_type='translation_complete',
+                    title='Dịch thuật hoàn tất',
+                    payload={'task_id': self.request.id, **result_data}
+                )
             return result_data
         else:
             raise Exception('Empty response from AI')
@@ -78,8 +95,15 @@ def translate_pure_text_task(self, text_input):
         raise
     except Exception as e:
         print(f"Translation Task Error: {e}")
-        return {
+        result = {
             'error': f'Dịch vụ dịch thuật tạm thời không khả dụng. Chi tiết: {str(e)}',
             'status': 'FAILED'
         }
-
+        if user_id:
+            ws_notify(
+                user_id=user_id,
+                event_type='translation_failed',
+                title='Dịch thuật thất bại',
+                payload={'task_id': self.request.id, 'error': result['error']}
+            )
+        return result

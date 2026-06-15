@@ -5,10 +5,13 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Count, Q
 from rest_framework.permissions import IsAuthenticated
 from django.http import FileResponse
-import requests
+import datetime
+from django.utils import timezone
+from django.core.cache import cache
+from apps.subscriptions.models import VolumeLimitConfig
 
 
-from .models import Notebook, Word
+from .models import Notebook, Word, PDFExportTask
 from .serializers import (
     NotebookListSerializer,
     NotebookDetailSerializer,
@@ -162,22 +165,42 @@ class DictionaryLookupView(APIView):
             'existing_entries': existing_data,
         })
 
+def get_seconds_until_midnight():
+    """
+    Tính toán chính xác số giây còn lại từ thời điểm hiện tại đến 00:00:00 ngày hôm sau (theo múi giờ địa phương).
+    """
+    now = timezone.localtime(timezone.now()) # Lấy thời gian hiện tại theo múi giờ địa phương cấu hình
+    
+    # Khởi tạo mốc thời gian 00:00:00 của ngày kế tiếp
+    tomorrow = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time.min)
+    
+    # Áp dụng múi giờ hiện tại của hệ thống để đảm bảo tính toán khoảng cách giây chính xác
+    tomorrow = timezone.make_aware(tomorrow, timezone.get_current_timezone())
+    
+    return int((tomorrow - now).total_seconds())
+
 
 class NotebookExportPDFView(APIView):
     """
-    GET /api/v1/notes/notebooks/<notebook_id>/export-pdf/
-    Gọi đến microservice pdf-service ở dạng Stream để kết xuất vở tập viết tiếng Trung (Tianzige)
-    với tùy chọn ngắt dòng tự động và căn lề bính âm đồng bộ.
+    POST /api/v1/notes/notebooks/<notebook_id>/export-pdf/
+    Khởi tạo tác vụ bất đồng bộ kết xuất PDF và đưa vào hàng đợi tương ứng với gói dịch vụ.
     """
     permission_classes = [IsAuthenticated]
 
+    def post(self, request, notebook_id):
+        return self._handle_export(request, notebook_id)
+
     def get(self, request, notebook_id):
+        # Hỗ trợ GET làm phương án dự phòng tương thích ngược
+        return self._handle_export(request, notebook_id)
+
+    def _handle_export(self, request, notebook_id):
         # 1. Xác thực và truy vấn dữ liệu từ vựng thuộc sổ tay
         notebook = get_object_or_404(Notebook, pk=notebook_id, user=request.user)
         words = notebook.words.all().order_by('-created_at')
 
         # Hỗ trợ xuất tùy chọn một vài từ vựng được chọn
-        word_ids_str = request.query_params.get('word_ids', '')
+        word_ids_str = request.data.get('word_ids', request.query_params.get('word_ids', ''))
         if word_ids_str:
             try:
                 word_ids = [int(x.strip()) for x in word_ids_str.split(',') if x.strip()]
@@ -186,7 +209,61 @@ class NotebookExportPDFView(APIView):
             except ValueError:
                 pass
 
-        # 2. Định dạng dữ liệu payload cho microservice
+        # 2. Kiểm tra gói cước (Tier) và giới hạn
+        sub = getattr(request.user, 'subscription', None)
+        if sub:
+            sub.check_validity()
+            tier = sub.tier
+        else:
+            tier = 'Free'
+
+        # Default fallback limits in case config doesn't exist in DB
+        FALLBACK_LIMITS = {
+            'Free': {'daily_limit': 2, 'max_words': 10},
+            'Plus': {'daily_limit': 5, 'max_words': 40},
+            'Premium': {'daily_limit': 10, 'max_words': 70},
+            'Pro': {'daily_limit': 15, 'max_words': 100},
+        }
+
+        # Query limits dynamically from VolumeLimitConfig
+        config = VolumeLimitConfig.objects.filter(tier=tier).first()
+        if config:
+            daily_limit = config.pdf_daily_limit
+            max_words = config.pdf_word_limit
+        else:
+            fallback = FALLBACK_LIMITS.get(tier, FALLBACK_LIMITS['Free'])
+            daily_limit = fallback['daily_limit']
+            max_words = fallback['max_words']
+
+        # Enforce maximum word count limit per PDF
+        word_count = words.count()
+        if word_count > max_words:
+            return Response(
+                {"detail": f"Gói {tier} chỉ được phép xuất tối đa {max_words} từ vựng mỗi file PDF (Hiện tại: {word_count} từ)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Enforce daily export limits (checked via Redis with midnight TTL reset)
+        today_str = timezone.localtime(timezone.now()).date().isoformat()
+        cache_key = f"pdf_export:count:{request.user.id}:{today_str}"
+
+        # Atomic increment check
+        try:
+            current_count = cache.incr(cache_key)
+        except ValueError:
+            # Key does not exist, initialize it with remaining seconds until midnight
+            cache.set(cache_key, 1, timeout=get_seconds_until_midnight())
+            current_count = 1
+
+        if current_count > daily_limit:
+            # Over the limit: decrement and return 429
+            cache.decr(cache_key)
+            return Response(
+                {"detail": f"Bạn đã vượt quá giới hạn xuất PDF trong ngày ({daily_limit} lần/ngày cho gói {tier})."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
+        # 3. Định dạng dữ liệu payload cho microservice
         words_data = []
         for w in words:
             words_data.append({
@@ -196,57 +273,219 @@ class NotebookExportPDFView(APIView):
                 "note": w.note or ""
             })
 
-        # Lấy các options từ query params
-        grid_color = request.query_params.get('grid_color', '#D32F2F')
-        show_pinyin = request.query_params.get('show_pinyin', 'true').lower() == 'true'
-        show_meaning = request.query_params.get('show_meaning', 'true').lower() == 'true'
-        show_notes = request.query_params.get('show_notes', 'true').lower() == 'true'
-        show_cover = request.query_params.get('show_cover', 'true').lower() == 'true'
+        # Safe Options Sanitization (Data Sanitization & Parameter Overrides)
+        get_param = lambda key, default: request.data.get(key, request.query_params.get(key, default))
+        
+        grid_color = get_param('grid_color', '#D32F2F')
+        show_pinyin = str(get_param('show_pinyin', 'true')).lower() == 'true'
+        show_meaning = str(get_param('show_meaning', 'true')).lower() == 'true'
+        show_notes = str(get_param('show_notes', 'true')).lower() == 'true'
 
+        safe_options = {
+            "grid_color": grid_color,
+            "show_pinyin": show_pinyin,
+            "show_meaning": show_meaning,
+            "show_notes": show_notes,
+        }
+
+        # Business Logic Guardrails (Khóa cứng cấu hình cho gói Free)
+        if tier == 'Free':
+            safe_options["show_cover"] = True
+            safe_options["branding_name"] = "XiaoYue Dict"
+        else:
+            safe_options["show_cover"] = str(get_param('show_cover', 'true')).lower() == 'true'
+            safe_options["branding_name"] = str(get_param('branding_name', 'XiaoYue Dict')).strip()
+
+        # Handle other options safely
         try:
-            extra_rows = int(request.query_params.get('extra_rows', '0'))
+            extra_rows = int(get_param('extra_rows', '0'))
         except ValueError:
             extra_rows = 0
 
         try:
-            empty_pages = int(request.query_params.get('empty_pages', '0'))
+            empty_pages = int(get_param('empty_pages', '0'))
         except ValueError:
             empty_pages = 0
 
-        empty_page_grid_size = request.query_params.get('empty_page_grid_size', 'auto')
+        empty_page_grid_size = get_param('empty_page_grid_size', 'auto')
 
-        payload = {
-            "title": notebook.name,
-            "words": words_data,
-            "options": {
-                "grid_color": grid_color,
-                "show_pinyin": show_pinyin,
-                "show_meaning": show_meaning,
-                "show_notes": show_notes,
-                "show_cover": show_cover,
-                "extra_rows": extra_rows,
-                "empty_pages": empty_pages,
-                "empty_page_grid_size": empty_page_grid_size
-            }
-        }
+        safe_options["extra_rows"] = extra_rows
+        safe_options["empty_pages"] = empty_pages
+        safe_options["empty_page_grid_size"] = empty_page_grid_size
 
-        # 3. Kết nối microservice với chế độ stream=True (Zero-Copy Pass-Through)
-        fastapi_url = "http://pdf-service:8082/generate"
-        try:
-            upstream_response = requests.post(fastapi_url, json=payload, stream=True, timeout=60)
-            upstream_response.raise_for_status()
-        except requests.RequestException as e:
+        # Phân phối hàng đợi ưu tiên cho paid users
+        if tier in ('Plus', 'Premium', 'Pro'):
+            target_queue = 'queue_paid'
+        else:
+            target_queue = 'queue_free'
+
+        # 4. Khởi tạo đối tượng PDFExportTask lưu trữ trong CSDL
+        task = PDFExportTask.objects.create(
+            user=request.user,
+            notebook=notebook,
+            status='PENDING',
+            queue_name=target_queue
+        )
+
+        # 5. Kích hoạt Celery Task xử lý nền
+        from .tasks import generate_pdf_task
+        generate_pdf_task.apply_async(
+            args=[
+                str(task.id),
+                notebook.id,
+                request.user.id,
+                words_data,
+                safe_options,
+                cache_key
+            ],
+            queue=target_queue
+        )
+
+        # 6. Tính toán vị trí hàng đợi động và thời gian chờ dự kiến
+        pending_ahead = PDFExportTask.objects.filter(
+            status__in=['PENDING', 'PROCESSING'],
+            queue_name=target_queue,
+            created_at__lt=task.created_at
+        ).count()
+        queue_position = pending_ahead + 1
+
+        import math
+        # Concurrency ước tính dựa trên cấu hình worker
+        concurrency = 2 if target_queue == 'queue_paid' else 1
+        processing_time_per_task = 10 # 10 giây/tệp
+        estimated_wait_seconds = math.ceil(queue_position / concurrency) * processing_time_per_task
+
+        return Response(
+            {
+                'task_id': str(task.id),
+                'status': 'PENDING',
+                'queue_position': queue_position,
+                'estimated_wait_seconds': estimated_wait_seconds,
+            },
+            status=status.HTTP_202_ACCEPTED
+        )
+
+
+class PDFExportStatusView(APIView):
+    """
+    GET /api/v1/notes/notebooks/export-pdf/status/<task_id>/
+    Trả về trạng thái hiện tại của tiến trình và vị trí hàng đợi.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, task_id):
+        task = get_object_or_404(PDFExportTask, id=task_id)
+
+        # IDOR Protection
+        if task.user != request.user:
             return Response(
-                {"detail": f"Dịch vụ biên tập PDF đang bận hoặc gặp sự cố: {str(e)}"},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
+                {'detail': 'Bạn không có quyền xem thông tin tác vụ này.'},
+                status=status.HTTP_403_FORBIDDEN
             )
 
-        # 4. Định tuyến dòng chảy dữ liệu trực tiếp sang client socket
+        queue_position = 0
+        estimated_wait_seconds = 0
+        if task.status in ('PENDING', 'PROCESSING'):
+            pending_ahead = PDFExportTask.objects.filter(
+                status__in=['PENDING', 'PROCESSING'],
+                queue_name=task.queue_name,
+                created_at__lt=task.created_at
+            ).count()
+            queue_position = pending_ahead + 1
+
+            import math
+            concurrency = 2 if task.queue_name == 'queue_paid' else 1
+            processing_time_per_task = 10
+            estimated_wait_seconds = math.ceil(queue_position / concurrency) * processing_time_per_task
+
+        return Response({
+            'task_id': str(task.id),
+            'status': task.status,
+            'queue_position': queue_position,
+            'estimated_wait_seconds': estimated_wait_seconds,
+            'error_message': task.error_message,
+            'created_at': task.created_at,
+            'updated_at': task.updated_at,
+        }, status=status.HTTP_200_OK)
+
+
+class PDFExportDownloadView(APIView):
+    """
+    GET /api/v1/notes/notebooks/export-pdf/download/<task_id>/
+    Tải xuống file PDF đã kết xuất nền hoàn tất.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, task_id):
+        task = get_object_or_404(PDFExportTask, id=task_id)
+
+        # IDOR Protection
+        if task.user != request.user:
+            return Response(
+                {'detail': 'Bạn không có quyền tải file từ tác vụ này.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if task.status != 'COMPLETED' or not task.pdf_file:
+            return Response(
+                {'detail': 'Tệp PDF chưa hoàn thành hoặc tác vụ kết xuất thất bại.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        safe_name = task.notebook.name.lower().replace(' ', '-')
         response = FileResponse(
-            upstream_response.raw,
+            task.pdf_file.open('rb'),
             content_type='application/pdf'
         )
-        response['Content-Disposition'] = f'attachment; filename="so-tay-tap-viet.pdf"'
+        response['Content-Disposition'] = f'attachment; filename="so-tay-tap-viet-{safe_name}.pdf"'
         return response
+
+
+class PDFExportLimitsView(APIView):
+    """
+    GET /api/v1/notes/notebooks/<notebook_id>/export-pdf/limits/
+    Trả về hạn mức xuất PDF trong ngày và số từ tối đa dựa trên gói cước của người dùng.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, notebook_id):
+        sub = getattr(request.user, 'subscription', None)
+        if sub:
+            sub.check_validity()
+            tier = sub.tier
+        else:
+            tier = 'Free'
+
+        FALLBACK_LIMITS = {
+            'Free': {'daily_limit': 2, 'max_words': 10},
+            'Plus': {'daily_limit': 5, 'max_words': 40},
+            'Premium': {'daily_limit': 10, 'max_words': 70},
+            'Pro': {'daily_limit': 15, 'max_words': 100},
+        }
+
+        # Query limits dynamically from VolumeLimitConfig
+        config = VolumeLimitConfig.objects.filter(tier=tier).first()
+        if config:
+            daily_limit = config.pdf_daily_limit
+            max_words = config.pdf_word_limit
+        else:
+            fallback = FALLBACK_LIMITS.get(tier, FALLBACK_LIMITS['Free'])
+            daily_limit = fallback['daily_limit']
+            max_words = fallback['max_words']
+
+        # Get current usage from Redis
+        today_str = timezone.localtime(timezone.now()).date().isoformat()
+        cache_key = f"pdf_export:count:{request.user.id}:{today_str}"
+        current_count = cache.get(cache_key) or 0
+
+        remaining = max(0, daily_limit - current_count)
+
+        return Response({
+            'tier': tier,
+            'daily_limit': daily_limit,
+            'current_count': current_count,
+            'remaining_count': remaining,
+            'max_words': max_words,
+        }, status=status.HTTP_200_OK)
 
 

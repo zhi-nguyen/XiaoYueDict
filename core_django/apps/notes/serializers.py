@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Notebook, Word
+from .models import Notebook, Word, PDFExportTask
 
 
 class WordSerializer(serializers.ModelSerializer):
@@ -45,3 +45,13 @@ class NotebookCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Notebook
         fields = ['name', 'description']
+
+
+class PDFExportTaskSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PDFExportTask
+        fields = [
+            'id', 'notebook', 'status', 'queue_name',
+            'error_message', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'notebook', 'status', 'queue_name', 'error_message', 'created_at', 'updated_at']

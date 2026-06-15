@@ -109,6 +109,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.gamification.tasks.calculate_daily_streaks',
         'schedule': crontab(hour=0, minute=0),
     },
+    'purge-old-pdf-exports-hourly': {
+        'task': 'apps.notes.tasks.purge_old_pdf_exports_task',
+        'schedule': crontab(minute=0),
+    },
 }
 
 # Cache Configuration using Redis
