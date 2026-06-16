@@ -130,6 +130,57 @@ class AIFallbackGateway:
                 "error": msg
             }, status=status.HTTP_400_BAD_REQUEST)
 
+        # ── Tầng 0: Tra cứu cơ sở dữ liệu đồng bộ trước khi kích hoạt Celery / AI ──
+        q_lower = text_input.lower().strip()
+        
+        if mode == 'zh':
+            from apps.dictionary_zh.models import ZhWord, ZhExample
+            from django.db.models import Q
+            
+            cleaned_query = re.sub(r'[。，、！？. , ! ?]+$', '', q_lower)
+            if cleaned_query:
+                # 1. Check ZhExample (exact example match)
+                regex_pattern = r'^' + re.escape(cleaned_query) + r'[。，、！？. , ! ?]*$'
+                match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
+                if match:
+                    return Response({
+                        'translatedText': match.vietnamese,
+                        'source': 'database',
+                        'status': 'SUCCESS'
+                    }, status=status.HTTP_200_OK)
+                
+                # 2. Check ZhWord (dictionary word match)
+                word_match = ZhWord.objects.filter(Q(word=cleaned_query) | Q(traditional=cleaned_query)).first()
+                if word_match:
+                    return Response({
+                        'translatedText': word_match.translation_vi,
+                        'source': 'database',
+                        'status': 'SUCCESS'
+                    }, status=status.HTTP_200_OK)
+                    
+        elif mode == 'en':
+            from apps.dictionary_en.models import EnWord, EnExample
+            
+            cleaned_query = re.sub(r'[. , ! ?]+$', '', q_lower)
+            if cleaned_query:
+                # 1. Check EnExample
+                match = EnExample.objects.filter(english__iexact=cleaned_query).first()
+                if match:
+                    return Response({
+                        'translatedText': match.vietnamese,
+                        'source': 'database',
+                        'status': 'SUCCESS'
+                    }, status=status.HTTP_200_OK)
+                
+                # 2. Check EnWord
+                word_match = EnWord.objects.filter(word__iexact=cleaned_query).first()
+                if word_match:
+                    return Response({
+                        'translatedText': word_match.translation_vi,
+                        'source': 'database',
+                        'status': 'SUCCESS'
+                    }, status=status.HTTP_200_OK)
+
         ai_cache_key = f"{cache_key_prefix}:{text_input}"
         cached_data = cache.get(ai_cache_key)
 
