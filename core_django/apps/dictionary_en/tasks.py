@@ -40,6 +40,24 @@ def translate_en_pure_text_task(self, text_input, user_id=None):
             )
         return result
 
+    # Tầng 1.2: Tra cứu DB tiếng Anh (EnWord)
+    from .models import EnWord
+    word_match = EnWord.objects.filter(word__iexact=cleaned_query).first()
+    if word_match:
+        result = {
+            'translatedText': word_match.translation_vi,
+            'source': 'database',
+            'status': 'SUCCESS'
+        }
+        if user_id:
+            ws_notify(
+                user_id=user_id,
+                event_type='translation_complete',
+                title='Dịch thuật hoàn tất',
+                payload={'task_id': self.request.id, **result}
+            )
+        return result
+
     # Tầng 2: Gọi LLM (Vertex AI Priority PayGo)
     system_prompt = "Bạn là chuyên gia dịch thuật Anh-Việt xuất sắc. Hãy dịch văn bản một cách mượt mà và tự nhiên nhất. Chỉ trả về kết quả dịch."
     try:
