@@ -5,6 +5,7 @@ import dj_database_url
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get('SECRET_KEY', 'replace-this-in-production')
+JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'replace-this-in-production')
 
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('true', '1', 't')
 
