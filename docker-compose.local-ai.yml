@@ -1,0 +1,80 @@
+version: "3.8"
+
+# ══════════════════════════════════════════════════════════════
+#  XiaoYueDict — Local AI Services Stack
+#  Runs ONLY ai-service-en & ai-service-zh on local GPU machine.
+#  Cloud VPS connects via private IP tunnel (Tailscale/ZeroTier).
+#
+#  Local IP:  100.127.227.6
+#  VPS IP:    100.92.141.97
+#
+#  Usage:
+#    docker compose -f docker-compose.local-ai.yml up -d
+# ══════════════════════════════════════════════════════════════
+
+services:
+  # ══════════════════════════════════════════════════════════
+  #  AI SERVICE — ENGLISH — 4 CPU / 16 GB RAM
+  # ══════════════════════════════════════════════════════════
+  ai-service-en:
+    build:
+      context: ./ai_service_en
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ai_service_en/model:/app/model
+    environment:
+      - ONNX_MODEL_PATH=/app/model/pronunciation_scorer_fp16.onnx
+      - WHISPER_MODEL_SIZE=base.en
+      - WHISPER_CACHE_DIR=/app/model/whisper_cache
+      - ORT_INTRA_OP_THREADS=2
+      - ORT_INTER_OP_THREADS=1
+      - OMP_NUM_THREADS=2
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    restart: always
+    networks:
+      - ai-network
+
+  # ══════════════════════════════════════════════════════════
+  #  AI SERVICE — CHINESE — 2 CPU / 6 GB RAM
+  # ══════════════════════════════════════════════════════════
+  ai-service-zh:
+    build:
+      context: ./ai_service_zh
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./ai_service_zh/models_cache:/app/models_cache
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    restart: always
+    networks:
+      - ai-network
+
+# ── Networks ──
+networks:
+  ai-network:
+    driver: bridge

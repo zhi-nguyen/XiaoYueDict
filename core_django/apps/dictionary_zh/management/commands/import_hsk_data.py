@@ -36,8 +36,17 @@ class Command(BaseCommand):
         total_words_imported = 0
         total_examples_imported = 0
 
-        # Load all existing words to memory to prevent duplicates efficiently
-        existing_words = set(ZhWord.objects.values_list('word', flat=True))
+        # Track exact duplicates (same word, pinyin, part of speech, translation_vi)
+        existing_exact_keys = set()
+        for w in ZhWord.objects.all():
+            w_str = w.word.strip()
+            py_str = w.pinyin.strip().lower()
+            pos_tuple = tuple(sorted([p.strip().lower() for p in w.part_of_speech]))
+            trans_str = w.translation_vi.strip().lower()
+            existing_exact_keys.add((w_str, py_str, pos_tuple, trans_str))
+
+        # Track prepared words in current session for composite key (word, pinyin, hsk_level)
+        prepared_words = {}
 
         for level in levels:
             file_path = os.path.join(base_dir, f"{level}.json")
@@ -59,36 +68,63 @@ class Command(BaseCommand):
                 
                 if not word_str or not word_id:
                     continue
-                    
-                if word_str in existing_words:
+                
+                pinyin_str = item.get("pinyin", "")
+                pos_list = item.get("part_of_speech", [])
+                trans_vi = item.get("translation_vi", "")
+                hsk_level_str = item.get("hsk_level", "")
+                
+                # Check for exact duplicates (Scenario B)
+                pos_tuple = tuple(sorted([p.strip().lower() for p in pos_list]))
+                exact_key = (word_str.strip(), pinyin_str.strip().lower(), pos_tuple, trans_vi.strip().lower())
+                
+                if exact_key in existing_exact_keys:
                     continue
                     
-                pinyin_str = item.get("pinyin", "")
-                toneless = get_toneless_pinyin(pinyin_str)
-
-                word_obj = ZhWord(
-                    id=word_id,
-                    word=word_str,
-                    traditional=item.get("traditional", ""),
-                    pinyin=pinyin_str,
-                    toneless_pinyin=toneless,
-                    han_viet=item.get("han_viet", ""),
-                    translation_vi=item.get("translation_vi", ""),
-                    translation_en=item.get("translation_en", ""),
-                    part_of_speech=item.get("part_of_speech", []),
-                    hsk_level=item.get("hsk_level", ""),
-                    radical=item.get("radical", []),
-                    stroke_number=item.get("stroke_number", []),
-                    components=item.get("components", []),
-                    synonyms=item.get("synonyms", []),
-                    antonyms=item.get("antonyms", []),
-                    tags=item.get("tags", []),
-                    word_frequency=item.get("word_frequency", 0.0) or 0.0,
-                    popularity_rank=item.get("popularity_rank", 0) or 0,
-                    audio_url=item.get("audio_url", "")
-                )
-                words_to_create.append(word_obj)
-                existing_words.add(word_str)
+                # Check for composite key collision (word, pinyin, hsk_level)
+                composite_key = (word_str.strip(), pinyin_str.strip().lower(), hsk_level_str.strip())
+                
+                if composite_key in prepared_words:
+                    word_obj = prepared_words[composite_key]
+                    
+                    # Merge parts of speech
+                    existing_pos = set(word_obj.part_of_speech)
+                    for pos in pos_list:
+                        if pos not in existing_pos:
+                            word_obj.part_of_speech.append(pos)
+                    
+                    # Merge translations
+                    existing_trans = [t.strip().lower() for t in word_obj.translation_vi.split(',')]
+                    new_trans = [t.strip() for t in trans_vi.split(',') if t.strip().lower() not in existing_trans]
+                    if new_trans:
+                        word_obj.translation_vi += ", " + ", ".join(new_trans)
+                else:
+                    toneless = get_toneless_pinyin(pinyin_str)
+                    word_obj = ZhWord(
+                        id=word_id,
+                        word=word_str,
+                        traditional=item.get("traditional", ""),
+                        pinyin=pinyin_str,
+                        toneless_pinyin=toneless,
+                        han_viet=item.get("han_viet", ""),
+                        translation_vi=trans_vi,
+                        translation_en=item.get("translation_en", ""),
+                        part_of_speech=pos_list,
+                        hsk_level=hsk_level_str,
+                        radical=item.get("radical", []),
+                        stroke_number=item.get("stroke_number", []),
+                        components=item.get("components", []),
+                        synonyms=item.get("synonyms", []),
+                        antonyms=item.get("antonyms", []),
+                        tags=item.get("tags", []),
+                        word_frequency=item.get("word_frequency", 0.0) or 0.0,
+                        popularity_rank=item.get("popularity_rank", 0) or 0,
+                        audio_url=item.get("audio_url", "")
+                    )
+                    words_to_create.append(word_obj)
+                    prepared_words[composite_key] = word_obj
+                
+                existing_exact_keys.add(exact_key)
 
                 for ex in item.get("examples", []):
                     examples_to_create.append(ZhExample(

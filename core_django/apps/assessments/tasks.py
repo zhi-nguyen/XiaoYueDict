@@ -184,7 +184,7 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
                 ai_service_url,
                 files=files,
                 data=data,
-                timeout=30,  # 30s timeout
+                timeout=60,  # 60s — accounts for tunnel latency + GPU inference time
             )
 
         # ── Handle AI service errors by status code ──

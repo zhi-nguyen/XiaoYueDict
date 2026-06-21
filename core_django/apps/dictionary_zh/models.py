@@ -5,7 +5,7 @@ from django.contrib.postgres.indexes import GinIndex
 
 class ZhWord(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    word = models.CharField(max_length=50, unique=True, db_index=True) # Từ vựng (VD: 爱)
+    word = models.CharField(max_length=50, db_index=True) # Từ vựng (VD: 爱)
     traditional = models.CharField(max_length=50, blank=True) # Phồn thể
     
     pinyin = models.CharField(max_length=100, db_index=True) # Pinyin có dấu (VD: ài)
@@ -38,6 +38,7 @@ class ZhWord(models.Model):
     audio_url = models.URLField(max_length=500, blank=True)
 
     class Meta:
+        unique_together = ('word', 'pinyin', 'hsk_level')
         indexes = [
             GinIndex(fields=['translation_vi'], name='zhword_trans_vi_gin', opclasses=['gin_trgm_ops']),
             GinIndex(fields=['han_viet'], name='zhword_hanviet_gin', opclasses=['gin_trgm_ops']),

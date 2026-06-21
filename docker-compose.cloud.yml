@@ -1,0 +1,256 @@
+version: "3.8"
+
+# ══════════════════════════════════════════════════════════════
+#  XiaoYueDict — Cloud VPS Stack
+#  Runs ALL services EXCEPT ai-service-en & ai-service-zh
+#  (AI services run on local GPU machine, accessed via private IP)
+#
+#  Usage:
+#    docker compose -f docker-compose.cloud.yml up -d
+# ══════════════════════════════════════════════════════════════
+
+services:
+  # ══════════════════════════════════════════════════════════
+  #  INFRASTRUCTURE
+  # ══════════════════════════════════════════════════════════
+
+  # ── Reverse Proxy & Router ──
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/proxy_params:/etc/nginx/proxy_params:ro
+      - django_static:/app/staticfiles:ro
+      - django_media:/app/media:ro
+    depends_on:
+      core-django:
+        condition: service_started
+      ws-gateway:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── Message Broker & Result Backend ──
+  redis:
+    image: redis:alpine
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── WebSocket Gateway ──
+  ws-gateway:
+    build:
+      context: ./ws_gateway
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    env_file:
+      - .env
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── Database ──
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-xiaoyue}
+      POSTGRES_USER: ${POSTGRES_USER:-xiaoyue}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    env_file:
+      - .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U xiaoyue" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ══════════════════════════════════════════════════════════
+  #  CORE DJANGO
+  # ══════════════════════════════════════════════════════════
+
+  # ── Django API Gateway ──
+  core-django:
+    build:
+      context: ./core_django
+    command: ["gunicorn", "core_project.wsgi:application", "--bind", "0.0.0.0:8080", "--workers", "3", "--worker-class", "gthread", "--threads", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL}
+      - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL}
+    env_file:
+      - .env
+    volumes:
+      - django_static:/app/staticfiles
+      - django_media:/app/media
+      - /opt/xiaoyue/data:/data
+      - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── Celery Worker (Core tasks & Translation) ──
+  celery-worker-core:
+    build:
+      context: ./core_django
+    command: celery -A core_project worker -Q queue_core --loglevel=info --concurrency=2
+    depends_on:
+      redis:
+        condition: service_healthy
+      core-django:
+        condition: service_started
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+    env_file:
+      - .env
+    volumes:
+      - django_media:/app/media
+      - /opt/xiaoyue/data:/data
+      - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── Celery Beat (Scheduler) ──
+  celery-beat:
+    build:
+      context: ./core_django
+    command: celery -A core_project beat --loglevel=info
+    depends_on:
+      redis:
+        condition: service_healthy
+      core-django:
+        condition: service_started
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+    env_file:
+      - .env
+    volumes:
+      - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── Celery Worker (Priority - Paid Queue) ──
+  celery-worker-priority:
+    build:
+      context: ./core_django
+    command: celery -A core_project worker -Q queue_paid --loglevel=info --concurrency=1
+    depends_on:
+      redis:
+        condition: service_healthy
+      core-django:
+        condition: service_started
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL}
+      - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL}
+    env_file:
+      - .env
+    volumes:
+      - django_media:/app/media
+      - /opt/xiaoyue/data:/data
+      - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── Celery Worker (Standard - Paid & Free Queues) ──
+  celery-worker-standard:
+    build:
+      context: ./core_django
+    command: celery -A core_project worker -Q queue_paid,queue_free --loglevel=info --concurrency=1
+    depends_on:
+      redis:
+        condition: service_healthy
+      core-django:
+        condition: service_started
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL}
+      - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL}
+    env_file:
+      - .env
+    volumes:
+      - django_media:/app/media
+      - /opt/xiaoyue/data:/data
+      - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── Celery Worker (Guest - Guest & Free Queues - Anti-starvation) ──
+  celery-worker-guest:
+    build:
+      context: ./core_django
+    command: celery -A core_project worker -Q queue_guest,queue_free --loglevel=info --concurrency=1
+    depends_on:
+      redis:
+        condition: service_healthy
+      core-django:
+        condition: service_started
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL}
+      - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL}
+    env_file:
+      - .env
+    volumes:
+      - django_media:/app/media
+      - /opt/xiaoyue/data:/data
+      - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── PDF Render Service ──
+  pdf-service:
+    build:
+      context: ./pdf_service
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+# ── Volumes ──
+volumes:
+  postgres_data:
+  django_static:
+  django_media:
+
+# ── Networks ──
+networks:
+  xiaoyue-network:
+    driver: bridge

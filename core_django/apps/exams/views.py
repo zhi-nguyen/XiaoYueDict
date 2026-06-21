@@ -39,6 +39,8 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if self.action in ['retrieve', 'full_exam']:
+            queryset = queryset.prefetch_related('sections__questions__options')
         level = self.request.query_params.get('level', None)
         if level is not None:
             queryset = queryset.filter(level__iexact=level)

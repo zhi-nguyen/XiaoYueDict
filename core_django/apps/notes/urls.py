@@ -9,6 +9,8 @@ from .views import (
     PDFExportStatusView,
     PDFExportDownloadView,
     PDFExportLimitsView,
+    SystemNotebookListView,
+    SystemNotebookWordsView,
 )
 
 urlpatterns = [
@@ -28,4 +30,8 @@ urlpatterns = [
 
     # Dictionary lookup
     path('lookup/', DictionaryLookupView.as_view(), name='dictionary_lookup'),
+
+    # System default notebooks
+    path('system-notebooks/', SystemNotebookListView.as_view(), name='system_notebook_list'),
+    path('system-notebooks/<str:key>/words/', SystemNotebookWordsView.as_view(), name='system_notebook_words'),
 ]
