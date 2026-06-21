@@ -19,9 +19,11 @@ services:
     image: nginx:alpine
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/proxy_params:/etc/nginx/proxy_params:ro
+      - /opt/xiaoyue/secure:/etc/nginx/certs:ro
       - django_static:/app/staticfiles:ro
       - django_media:/app/media:ro
     depends_on:
