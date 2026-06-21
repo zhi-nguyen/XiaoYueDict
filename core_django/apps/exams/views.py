@@ -9,9 +9,11 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.throttling import ScopedRateThrottle
 from django.core.cache import cache
+from google.cloud import storage
 from .models import Exam, Section, Question, Option
 from .serializers import ExamSerializer, ExamListSerializer
 from .throttles import UniqueExamAccessThrottle
+from .tasks import process_exam_media_task
 
 
 class ExamViewSet(viewsets.ReadOnlyModelViewSet):
@@ -215,8 +217,11 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
             # Evict cache for this exam
             cache.delete(f"exam:data:{exam_id}")
 
+            # Trigger background task to process and upload to GCS on commit
+            transaction.on_commit(lambda: process_exam_media_task.delay(exam_id))
+
             return Response({
-                'message': 'Exam uploaded successfully',
+                'message': 'Exam uploaded successfully. Media processing started in the background.',
                 'exam_id': exam_id,
                 'audio_url': audio_url,
                 'images_uploaded': len(saved_images)
