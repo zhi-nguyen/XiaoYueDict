@@ -91,6 +91,8 @@ class EnPureTextTranslationView(APIView):
 
 
 class EnTranslationStatusView(APIView):
+    throttle_classes = []
+
     def get(self, request, task_id):
         res = AsyncResult(task_id)
         if res.state == 'SUCCESS':

@@ -108,6 +108,8 @@ class AssessmentStatusView(APIView):
     GET /api/v1/assessments/status/<task_id>/
     Returns current status, queue position, and result data when completed.
     """
+    throttle_classes = []
+
     def get(self, request, task_id, *args, **kwargs):
         try:
             task = AssessmentTask.objects.get(id=task_id)

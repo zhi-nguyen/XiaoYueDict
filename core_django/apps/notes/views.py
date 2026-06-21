@@ -381,6 +381,7 @@ class PDFExportStatusView(APIView):
     Trả về trạng thái hiện tại của tiến trình và vị trí hàng đợi.
     """
     permission_classes = [IsAuthenticated]
+    throttle_classes = []
 
     def get(self, request, task_id):
         task = get_object_or_404(PDFExportTask, id=task_id)
