@@ -8,6 +8,7 @@ from django.conf import settings
 from celery import shared_task
 from celery.exceptions import Retry, MaxRetriesExceededError
 from requests.exceptions import RequestException
+from google.cloud import storage
 from .models import AssessmentTask
 from core_project.ws_utils import ws_notify
 from apps.subscriptions.middleware import refund_volume_limit
@@ -90,6 +91,23 @@ def cleanup_audio_files(*paths):
                 logger.info(f"🗑️ Cleaned up: {os.path.basename(path)}")
             except OSError as exc:
                 logger.warning(f"⚠️ Failed to delete {path}: {exc}")
+
+
+def upload_to_gcs(local_path: str, target_blob_name: str, bucket_name: str) -> str:
+    """
+    Upload a local file to a GCS bucket.
+    Uses the service account credentials pointed to by GOOGLE_APPLICATION_CREDENTIALS.
+    """
+    try:
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(target_blob_name)
+        blob.upload_from_filename(local_path)
+        logger.info(f"☁️ Uploaded successfully: gs://{bucket_name}/{target_blob_name}")
+        return blob.public_url
+    except Exception as e:
+        logger.error(f"❌ Failed to upload {local_path} to GCS: {e}")
+        raise e
 
 
 # ── Celery Task ───────────────────────────────────────────────
@@ -220,21 +238,23 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
 
         logger.warning(f"✅ Assessment {assessment_id} ({language}) - Score: {task.score}")
 
-        # ── Step 3.5: Save to Persistent Storage ──
+        # ── Step 3.5: Save to Persistent Storage (GCS Bucket) ──
         try:
             # Determine folder name (user_id if available, else anonymous)
             raw_user_identifier = str(user_id).split(':')[-1] if user_id else "anonymous"
             user_folder = str(task.user.id) if task.user else raw_user_identifier
-            data_dir = os.path.join(settings.XIAOYUE_DATA_ROOT, user_folder)
-            os.makedirs(data_dir, exist_ok=True)
             
-            # Copy original audio file
+            bucket_name = os.environ.get('GS_BUCKET_NAME', 'cnen-bucket')
             ext = os.path.splitext(file_path)[1] or '.wav'
-            perm_audio_path = os.path.join(data_dir, f"{assessment_id}{ext}")
-            shutil.copy2(file_path, perm_audio_path)
             
-            # Write JSON file
-            json_path = os.path.join(data_dir, f"{assessment_id}.json")
+            gcs_audio_blob = f"assessments/{user_folder}/{assessment_id}{ext}"
+            gcs_json_blob = f"assessments/{user_folder}/{assessment_id}.json"
+            
+            # Upload original audio file to GCS
+            upload_to_gcs(file_path, gcs_audio_blob, bucket_name)
+            
+            # Write JSON data locally temporarily
+            temp_json_path = f"{file_path}.json"
             json_data = {
                 "id": str(task.id),
                 "language": task.language,
@@ -242,12 +262,18 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
                 "result_data": task.result_data,
                 "created_at": task.created_at.isoformat()
             }
-            with open(json_path, 'w', encoding='utf-8') as f:
+            with open(temp_json_path, 'w', encoding='utf-8') as f:
                 json.dump(json_data, f, ensure_ascii=False, indent=4)
-                
-            logger.info(f"💾 Saved permanent files to {data_dir}")
+            
+            # Upload JSON data to GCS
+            upload_to_gcs(temp_json_path, gcs_json_blob, bucket_name)
+            
+            # Clean up temporary JSON file
+            cleanup_audio_files(temp_json_path)
+            
+            logger.info(f"💾 Saved permanent files to GCS gs://{bucket_name}/assessments/{user_folder}/")
         except Exception as perm_err:
-            logger.error(f"⚠️ Failed to save permanent files: {perm_err}")
+            logger.error(f"⚠️ Failed to save permanent files to GCS: {perm_err}")
 
         # Notify user via WebSocket
         ws_notify(
