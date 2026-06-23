@@ -74,6 +74,6 @@ class WsTokenView(APIView):
             "iat": now,
             "exp": now + timedelta(minutes=2),
         }
-        token = jwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")
+        token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm="HS256")
         return Response({"ws_token": token, "user_id": user_id})
 

@@ -69,7 +69,12 @@ class UniqueExamAccessThrottle(BaseThrottle):
 
         try:
             # Truy xuất native Redis client từ Cache Backend của Django
-            redis_client = cache.client.get_client()
+            if hasattr(cache, 'client') and hasattr(cache.client, 'get_client'):
+                redis_client = cache.client.get_client()
+            elif hasattr(cache, '_cache') and hasattr(cache._cache, 'get_client'):
+                redis_client = cache._cache.get_client(None)
+            else:
+                raise AttributeError("Could not retrieve native Redis client from Django cache backend.")
             
             # Đăng ký và thực thi Kịch bản Lua nguyên tử
             script = redis_client.register_script(LUA_BEHAVIORAL_SLIDING_LIMITER)

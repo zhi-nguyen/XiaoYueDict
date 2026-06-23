@@ -5,6 +5,15 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Count, Q
 from rest_framework.permissions import IsAuthenticated
 from django.http import FileResponse
+from rest_framework import generics
+from rest_framework.permissions import AllowAny
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
+from django.http import Http404
+from apps.subscriptions.permissions import IsPremiumUser
+from rest_framework.pagination import PageNumberPagination
+from apps.dictionary_zh.models import ZhWord
+from apps.dictionary_zh.serializers import ZhWordSerializer
 import datetime
 from django.utils import timezone
 from django.core.cache import cache
@@ -372,6 +381,7 @@ class PDFExportStatusView(APIView):
     Trả về trạng thái hiện tại của tiến trình và vị trí hàng đợi.
     """
     permission_classes = [IsAuthenticated]
+    throttle_classes = []
 
     def get(self, request, task_id):
         task = get_object_or_404(PDFExportTask, id=task_id)
@@ -487,5 +497,123 @@ class PDFExportLimitsView(APIView):
             'remaining_count': remaining,
             'max_words': max_words,
         }, status=status.HTTP_200_OK)
+
+
+@method_decorator(cache_page(60 * 60 * 24), name='dispatch')
+class SystemNotebookListView(APIView):
+    """
+    GET /api/v1/notes/system-notebooks/
+    Trả về danh mục các sổ tay hệ thống (HSK, Từ loại, Tags) kèm trạng thái Premium.
+    Sử dụng bộ nhớ đệm cache_page với TTL 24h để tối ưu hiệu năng.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from django.db.models import Count
+        from apps.dictionary_zh.models import ZhWord
+        
+        # 1. Fetch HSK counts
+        hsk_counts = dict(
+            ZhWord.objects.values('hsk_level')
+            .annotate(count=Count('id'))
+            .values_list('hsk_level', 'count')
+        )
+
+        hsk_books = [
+            {"id": "hsk_1", "name": "Từ vựng HSK 1", "description": "Sổ tay từ vựng luyện thi HSK cấp độ 1", "type": "hsk", "is_premium": False, "word_count": hsk_counts.get("1", 0)},
+            {"id": "hsk_2", "name": "Từ vựng HSK 2", "description": "Sổ tay từ vựng luyện thi HSK cấp độ 2", "type": "hsk", "is_premium": False, "word_count": hsk_counts.get("2", 0)},
+            {"id": "hsk_3", "name": "Từ vựng HSK 3", "description": "Sổ tay từ vựng luyện thi HSK cấp độ 3", "type": "hsk", "is_premium": False, "word_count": hsk_counts.get("3", 0)},
+            {"id": "hsk_4", "name": "Từ vựng HSK 4", "description": "Sổ tay từ vựng luyện thi HSK cấp độ 4", "type": "hsk", "is_premium": False, "word_count": hsk_counts.get("4", 0)},
+            {"id": "hsk_5", "name": "Từ vựng HSK 5", "description": "Sổ tay từ vựng luyện thi HSK cấp độ 5", "type": "hsk", "is_premium": False, "word_count": hsk_counts.get("5", 0)},
+            {"id": "hsk_6", "name": "Từ vựng HSK 6", "description": "Sổ tay từ vựng luyện thi HSK cấp độ 6", "type": "hsk", "is_premium": False, "word_count": hsk_counts.get("6", 0)},
+            {"id": "hsk_7-9", "name": "Từ vựng HSK 7-9", "description": "Sổ tay từ vựng luyện thi HSK cấp độ 7 - 9", "type": "hsk", "is_premium": False, "word_count": hsk_counts.get("7-9", 0)},
+        ]
+        
+        pos_books = [
+            {"id": "pos_noun", "name": "Danh từ (Noun)", "description": "Từ vựng phân loại theo Danh từ", "type": "pos", "is_premium": True},
+            {"id": "pos_verb", "name": "Động từ (Verb)", "description": "Từ vựng phân loại theo Động từ", "type": "pos", "is_premium": True},
+            {"id": "pos_adjective", "name": "Tính từ (Adjective)", "description": "Từ vựng phân loại theo Tính từ", "type": "pos", "is_premium": True},
+            {"id": "pos_adverb", "name": "Phó từ (Adverb)", "description": "Từ vựng phân loại theo Phó từ", "type": "pos", "is_premium": True},
+            {"id": "pos_idiom", "name": "Thành ngữ (Idiom)", "description": "Từ vựng phân loại theo Thành ngữ", "type": "pos", "is_premium": True},
+            {"id": "pos_classifier", "name": "Lượng từ (Classifier)", "description": "Từ vựng phân loại theo Lượng từ", "type": "pos", "is_premium": True},
+            {"id": "pos_conjunction", "name": "Liên từ (Conjunction)", "description": "Từ vựng phân loại theo Liên từ", "type": "pos", "is_premium": True},
+            {"id": "pos_preposition", "name": "Giới từ (Preposition)", "description": "Từ vựng phân loại theo Giới từ", "type": "pos", "is_premium": True},
+            {"id": "pos_pronoun", "name": "Đại từ (Pronoun)", "description": "Từ vựng phân loại theo Đại từ", "type": "pos", "is_premium": True},
+        ]
+        
+        # 2. Count POS books
+        for book in pos_books:
+            pos_type = book["id"].replace("pos_", "")
+            book["word_count"] = ZhWord.objects.filter(part_of_speech__contains=pos_type).count()
+        
+        tag_books = [
+            {"id": "tag_人", "name": "Con người", "description": "Từ vựng chủ đề Con người", "type": "tag", "is_premium": True},
+            {"id": "tag_实体", "name": "Thực thể", "description": "Từ vựng chủ đề Thực thể", "type": "tag", "is_premium": True},
+            {"id": "tag_动物", "name": "Động vật", "description": "Từ vựng chủ đề Động vật", "type": "tag", "is_premium": True},
+            {"id": "tag_商业", "name": "Thương mại", "description": "Từ vựng chủ đề Thương mại", "type": "tag", "is_premium": True},
+            {"id": "tag_职位", "name": "Nghề nghiệp", "description": "Từ vựng chủ đề Nghề nghiệp", "type": "tag", "is_premium": True},
+            {"id": "tag_事件", "name": "Sự kiện", "description": "Từ vựng chủ đề Sự kiện", "type": "tag", "is_premium": True},
+            {"id": "tag_政", "name": "Chính trị", "description": "Từ vựng chủ đề Chính trị", "type": "tag", "is_premium": True},
+            {"id": "tag_生理学", "name": "Sinh lý học", "description": "Từ vựng chủ đề Sinh lý học", "type": "tag", "is_premium": True},
+            {"id": "tag_群体", "name": "Nhóm người", "description": "Từ vựng chủ đề Nhóm người", "type": "tag", "is_premium": True},
+            {"id": "tag_家庭", "name": "Gia đình", "description": "Từ vựng chủ đề Gia đình", "type": "tag", "is_premium": True},
+            {"id": "tag_物质", "name": "Vật chất", "description": "Từ vựng chủ đề Vật chất", "type": "tag", "is_premium": True},
+            {"id": "tag_医", "name": "Y tế", "description": "Từ vựng chủ đề Y tế", "type": "tag", "is_premium": True},
+            {"id": "tag_教育", "name": "Giáo dục", "description": "Từ vựng chủ đề Giáo dục", "type": "tag", "is_premium": True},
+            {"id": "tag_金融", "name": "Tài chính", "description": "Từ vựng chủ đề Tài chính", "type": "tag", "is_premium": True},
+            {"id": "tag_体育", "name": "Thể thao", "description": "Từ vựng chủ đề Thể thao", "type": "tag", "is_premium": True},
+        ]
+        
+        # 3. Count Tag books
+        for book in tag_books:
+            tag_name = book["id"].replace("tag_", "")
+            book["word_count"] = ZhWord.objects.filter(tags__contains=tag_name).count()
+        
+        return Response({
+            "hsk": hsk_books,
+            "pos": pos_books,
+            "tag": tag_books
+        })
+
+
+class SystemNotebookPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class SystemNotebookWordsView(generics.ListAPIView):
+    """
+    GET /api/v1/notes/system-notebooks/<key>/words/
+    Trả về danh sách từ vựng ảo (Virtual Query Routing) của sổ tay hệ thống.
+    - HSK: tất cả mọi người có thể xem.
+    - POS & Tag: chỉ Premium/Pro user được xem.
+    """
+    serializer_class = ZhWordSerializer
+    pagination_class = SystemNotebookPagination
+
+    def get_permissions(self):
+        key = self.kwargs.get('key', '')
+        if key.startswith('hsk_'):
+            return [AllowAny()]
+        return [IsPremiumUser()]
+
+    def get_queryset(self):
+        key = self.kwargs.get('key', '')
+        queryset = ZhWord.objects.prefetch_related('examples').all()
+        
+        if key.startswith('hsk_'):
+            hsk_level = key.replace('hsk_', '')
+            return queryset.filter(hsk_level=hsk_level).order_by('popularity_rank', 'id')
+            
+        elif key.startswith('pos_'):
+            pos_type = key.replace('pos_', '')
+            return queryset.filter(part_of_speech__contains=pos_type).order_by('popularity_rank', 'id')
+            
+        elif key.startswith('tag_'):
+            tag_name = key.replace('tag_', '')
+            return queryset.filter(tags__contains=tag_name).order_by('popularity_rank', 'id')
+            
+        raise Http404("Danh mục sổ tay hệ thống không tồn tại.")
 
 

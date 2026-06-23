@@ -181,9 +181,9 @@ class ZhWordSearchView(generics.ListAPIView):
 
         # 4. Filter and Distinct
         if len(cleaned_query) >= 2:
-            queryset = queryset.filter(match_level__lte=8).distinct()
+            queryset = queryset.filter(match_level__lte=8)
         else:
-            queryset = queryset.filter(match_level__lte=7).distinct()
+            queryset = queryset.filter(match_level__lte=7)
             
         # 5. Final Sort Order
         queryset = queryset.order_by('match_level', '-reverse_sort_len', 'adjusted_rank', 'word_frequency')

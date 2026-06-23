@@ -6,6 +6,8 @@
 .env
 .env.*
 !.env.example
+!.env.cloud.example
+!.env.production.example
 *.pem
 *.key
 xiaoyue-api-key.json
