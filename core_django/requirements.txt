@@ -16,3 +16,4 @@ PyJWT>=2.8
 jieba
 google-genai
 google-cloud-storage
+firebase-admin
