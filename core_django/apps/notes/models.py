@@ -8,6 +8,7 @@ class Notebook(models.Model):
     Sổ tay từ vựng — mỗi sổ chỉ cần một tên.
     Người dùng có thể tạo nhiều sổ.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -40,6 +41,7 @@ class Word(models.Model):
     Từ vựng trong sổ tay.
     Bao gồm: từ vựng (hanzi), bính âm (pinyin), nghĩa, ghi chú.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     notebook = models.ForeignKey(
         Notebook,
         on_delete=models.CASCADE,

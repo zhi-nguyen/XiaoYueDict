@@ -1,8 +1,10 @@
+import uuid
 from django.db import models
 from django.conf import settings
 
 
 class Notification(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     """
     Persistent notification storage — ensures no notification is lost
     when user is offline. Redis Pub/Sub is fire-and-forget, so we

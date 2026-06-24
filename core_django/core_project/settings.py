@@ -92,19 +92,37 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS — restrict to allowed origins in production, allow all in development
+# CORS & CSRF Configuration — required for Cookie-based Credentials
+CORS_ALLOW_CREDENTIALS = True
 _cors_origins = os.environ.get('CORS_ALLOWED_ORIGINS', '')
 if _cors_origins:
-    CORS_ALLOW_ALL_ORIGINS = False
     CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_origins.split(',') if o.strip()]
 else:
-    CORS_ALLOW_ALL_ORIGINS = True
+    # Fallback to local dev domains for credentials support (cannot use '*' with credentials)
+    CORS_ALLOWED_ORIGINS = [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+    ]
+
+# Dynamic CORS regex matching for Vercel preview environments in non-debug mode
+if not DEBUG:
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^https:\/\/xiaoyue-dict-.*\.vercel\.app$",
+    ]
+
 CORS_EXPOSE_HEADERS = ['Retry-After']
 
 # CSRF Trusted Origins (required for Django 4+ when behind reverse proxy)
 _csrf_origins = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
 if _csrf_origins:
     CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_origins.split(',') if o.strip()]
+else:
+    if not DEBUG:
+        # Fallback to match production domains or preview domains dynamically if needed
+        CSRF_TRUSTED_ORIGINS = [
+            'https://cnendict.xyz',
+            'https://www.cnendict.xyz',
+        ]
 
 # Production Security — Cloudflare Proxy terminates SSL, forwards X-Forwarded-Proto
 if not DEBUG:
@@ -151,7 +169,7 @@ REST_FRAMEWORK = {
         'exam_fetch': '10/minute',
     },
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'core_project.authentication.CookieJWTAuthentication',
     )
 }
 
@@ -162,6 +180,14 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
+    
+    # Cookie configurations
+    'AUTH_COOKIE': 'access_token',
+    'AUTH_COOKIE_REFRESH': 'refresh_token',
+    'AUTH_COOKIE_SECURE': not DEBUG,
+    'AUTH_COOKIE_HTTPONLY': True,
+    'AUTH_COOKIE_SAME_SITE': 'Lax',
+    'AUTH_COOKIE_USE_CSRF': True,
 }
 
 # External Data Storage (mounted from D:/XiaoYueDict_data)

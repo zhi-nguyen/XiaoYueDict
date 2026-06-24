@@ -1,0 +1,61 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_modify %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+<a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+&rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+&rsaquo; <a href="{% url 'admin:exams_exam_changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+&rsaquo; Tải lên đề thi
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+    <form action="" method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div>
+            <fieldset class="module aligned">
+                <h2>Tải lên toàn bộ đề thi (JSON, Audio, Hình ảnh)</h2>
+                
+                <div class="form-row">
+                    <div>
+                        <label class="required" for="exam_json">JSON Đề thi (test.json):</label>
+                        <input type="file" name="exam_json" id="exam_json" required accept=".json">
+                        <div class="help">Chọn file JSON chứa thông tin câu hỏi và cài đặt đề thi.</div>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div>
+                        <label for="audio_file">File Audio (audio.mp3):</label>
+                        <input type="file" name="audio_file" id="audio_file" accept=".mp3">
+                        <div class="help">Chọn file audio nghe chung của đề thi (nếu có).</div>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div>
+                        <label for="image_mapping">Image Mapping (img_mapping.json):</label>
+                        <input type="file" name="image_mapping" id="image_mapping" accept=".json">
+                        <div class="help">Chọn file JSON ánh xạ hình ảnh (nếu có).</div>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div>
+                        <label for="images">Hình ảnh minh họa:</label>
+                        <input type="file" name="images" id="images" multiple accept="image/*">
+                        <div class="help">Chọn nhiều hình ảnh minh họa đi kèm đề thi.</div>
+                    </div>
+                </div>
+            </fieldset>
+
+            <div class="submit-row">
+                <input type="submit" value="Tải lên và Nhập dữ liệu" class="default" name="_save">
+                <a href="../" class="closelink">Hủy bỏ</a>
+            </div>
+        </div>
+    </form>
+</div>
+{% endblock %}

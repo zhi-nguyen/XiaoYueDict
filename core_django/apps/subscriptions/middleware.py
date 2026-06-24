@@ -70,18 +70,15 @@ class VolumeLimitMiddleware(MiddlewareMixin):
             # 2. Định danh đối tượng truy cập (Hỗ trợ tài khoản và tài khoản khách IP)
             user = request.user
             if not user or not user.is_authenticated:
-                auth_header = request.headers.get('Authorization') or request.META.get('HTTP_AUTHORIZATION')
-                if auth_header and auth_header.startswith('Bearer '):
-                    try:
-                        token = auth_header.split(' ')[1]
-                        from rest_framework_simplejwt.authentication import JWTAuthentication
-                        jwt_auth = JWTAuthentication()
-                        validated_token = jwt_auth.get_validated_token(token)
-                        user = jwt_auth.get_user(validated_token)
-                        if user:
-                            request.user = user
-                    except Exception as e:
-                        logger.warning(f"Failed to authenticate JWT in VolumeLimitMiddleware: {e}")
+                try:
+                    from core_project.authentication import CookieJWTAuthentication
+                    cookie_auth = CookieJWTAuthentication()
+                    auth_result = cookie_auth.authenticate(request)
+                    if auth_result:
+                        user, _ = auth_result
+                        request.user = user
+                except Exception as e:
+                    logger.warning(f"Failed to authenticate Cookie JWT in VolumeLimitMiddleware: {e}")
 
             if user and user.is_authenticated:
                 user_id = f"user:{user.id}"

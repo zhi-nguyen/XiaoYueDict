@@ -1,9 +1,11 @@
+import uuid
 from decimal import Decimal
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
 
 class SubscriptionPlan(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     TIER_CHOICES = [
         ('Free', 'Free'),
         ('Plus', 'Plus'),
@@ -32,6 +34,7 @@ class SubscriptionPlan(models.Model):
 
 
 class UserSubscription(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     TIER_CHOICES = [
         ('Free', 'Free'),
         ('Plus', 'Plus'),
@@ -91,6 +94,7 @@ class UserSubscription(models.Model):
 
 
 class SubscriptionHistory(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     ACTION_CHOICES = [
         ('UPGRADE', 'Nâng cấp'),
         ('RENEW', 'Gia hạn'),
@@ -109,6 +113,7 @@ class SubscriptionHistory(models.Model):
 
 
 class VolumeLimitConfig(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     TIER_CHOICES = [
         ('Guest', 'Guest'),
         ('Free', 'Free'),

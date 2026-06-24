@@ -1,8 +1,10 @@
+import uuid
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
 
 class UserStreak(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='streak')
     current_streak = models.IntegerField(default=0)
     max_streak = models.IntegerField(default=0)
@@ -11,6 +13,7 @@ class UserStreak(models.Model):
         return f"{self.user.username} - Streak: {self.current_streak}"
 
 class DailyTarget(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='daily_target')
     target_words = models.IntegerField(default=10)
     target_duration = models.IntegerField(default=15) # in minutes
@@ -20,6 +23,7 @@ class DailyTarget(models.Model):
         return f"{self.user.username} Target: {self.target_words} words"
 
 class StudyHistory(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='study_histories')
     study_date = models.DateField(default=timezone.now)
     vocabulary_learned = models.IntegerField(default=0)
@@ -33,6 +37,7 @@ class StudyHistory(models.Model):
         return f"{self.user.username} - {self.study_date}"
 
 class DailyActivity(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='daily_activities')
     activity_date = models.DateField(default=timezone.now)
     is_target_met = models.BooleanField(default=False)
