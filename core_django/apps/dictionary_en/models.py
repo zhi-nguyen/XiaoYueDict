@@ -9,6 +9,7 @@ class EnWord(models.Model):
     part_of_speech = models.JSONField(default=list)
     cefr_level = models.CharField(max_length=10, blank=True, db_index=True) # A1, A2, B1...
     audio_url = models.URLField(max_length=500, blank=True)
+    image_url = models.URLField(max_length=500, blank=True)
     
     def __str__(self):
         return self.word

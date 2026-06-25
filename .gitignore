@@ -110,3 +110,7 @@ core_django/hsk_data/
 /test_s
 core_django/key.json
 core_django/cnen-auth-key.json
+
+# ── TTS Service ──
+tts_service/cache/
+**/key.json

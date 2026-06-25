@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     'apps.subscriptions',
     'apps.gamification',
     'apps.notifications',
+    'apps.media',
     'rest_framework_simplejwt',
 ]
 
@@ -192,3 +193,6 @@ SIMPLE_JWT = {
 
 # External Data Storage (mounted from D:/XiaoYueDict_data)
 XIAOYUE_DATA_ROOT = os.environ.get('XIAOYUE_DATA_ROOT', '/data')
+
+# AI Service Availability Configuration
+AI_SERVICE_AVAILABLE = os.environ.get('AI_SERVICE_AVAILABLE', 'True').lower() == 'true'

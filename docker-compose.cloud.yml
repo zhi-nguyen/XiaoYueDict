@@ -246,6 +246,22 @@ services:
     networks:
       - xiaoyue-network
 
+  # ── TTS Service ──
+  tts-service:
+    build:
+      context: ./tts_service
+    volumes:
+      - ./tts_service/cache:/app/cache
+      - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
+      - GS_BUCKET_NAME=${GS_BUCKET_NAME:-cnen-bucket}
+      - DEFAULT_ZH_VOICE=zh-CN-XiaoxiaoNeural
+      - DEFAULT_EN_VOICE=en-US-AriaNeural
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
 # ── Volumes ──
 volumes:
   postgres_data:

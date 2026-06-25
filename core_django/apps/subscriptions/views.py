@@ -26,6 +26,8 @@ class SubscriptionHistoryListView(generics.ListAPIView):
         return SubscriptionHistory.objects.filter(user=self.request.user).order_by('-changed_at')
 
 
+from apps.assessments.utils import is_service_available
+
 class SubscriptionUsageView(APIView):
     permission_classes = [AllowAny]
 
@@ -82,6 +84,7 @@ class SubscriptionUsageView(APIView):
             'limit_day': limit_day,
             'used_min': used_min,
             'used_hr': used_hr,
-            'used_day': used_day
+            'used_day': used_day,
+            'service_available': is_service_available()
         }, status=status.HTTP_200_OK)
 

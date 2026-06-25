@@ -15,5 +15,5 @@ class ZhWordSerializer(serializers.ModelSerializer):
             'id', 'word', 'traditional', 'pinyin', 'toneless_pinyin', 'han_viet',
             'translation_vi', 'translation_en', 'part_of_speech', 'hsk_level',
             'radical', 'stroke_number', 'components', 'synonyms', 'antonyms',
-            'tags', 'word_frequency', 'popularity_rank', 'audio_url', 'examples'
+            'tags', 'word_frequency', 'popularity_rank', 'audio_url', 'image_url', 'examples'
         ]

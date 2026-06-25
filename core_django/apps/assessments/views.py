@@ -7,6 +7,14 @@ from .serializers import AssessmentTaskSerializer
 from .tasks import process_audio_task
 
 
+import subprocess
+import os
+import logging
+from apps.subscriptions.middleware import refund_volume_limit
+from .utils import is_service_available
+
+logger = logging.getLogger(__name__)
+
 class SubmitAssessmentView(APIView):
     """
     POST /api/v1/assessments/submit/
@@ -16,11 +24,38 @@ class SubmitAssessmentView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request, *args, **kwargs):
+        # 0. Kiểm tra bảo trì
+        if not is_service_available():
+            return Response(
+                {
+                    'error': 'Service Unavailable',
+                    'message': 'Dịch vụ chấm điểm hiện đang bảo trì hoặc tạm ngưng hoạt động. Vui lòng quay lại sau.'
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
         audio_file = request.FILES.get('audio')
         if not audio_file:
             return Response(
                 {'error': 'No audio file provided.'},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Chặn cứng tệp tin > 2MB
+        if audio_file.size > 2 * 1024 * 1024:
+            guest_id = request.data.get('guest_id')
+            rate_limit_user_id = getattr(request, 'rate_limit_user_id', None)
+            if not rate_limit_user_id:
+                if request.user and request.user.is_authenticated:
+                    rate_limit_user_id = f"user:{request.user.id}"
+                else:
+                    identifier = guest_id if guest_id else request.META.get('REMOTE_ADDR', 'anonymous')
+                    rate_limit_user_id = f"guest:{identifier}"
+            
+            refund_volume_limit(rate_limit_user_id, audio_file.size)
+            return Response(
+                {'error': 'Dung lượng tệp ghi âm vượt quá giới hạn tối đa cho phép (2MB).'},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
         target_text = request.data.get('target_text', '')
@@ -63,6 +98,40 @@ class SubmitAssessmentView(APIView):
             else:
                 identifier = guest_id if guest_id else request.META.get('REMOTE_ADDR', 'anonymous')
                 rate_limit_user_id = f"guest:{identifier}"
+
+        # Đo thời lượng bằng ffprobe có timeout
+        duration = 0
+        has_error = False
+        error_msg = ''
+        try:
+            cmd = [
+                'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1', task.audio_file.path
+            ]
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+            if result.returncode == 0:
+                duration = float(result.stdout.strip())
+                if duration > 45:
+                    has_error = True
+                    error_msg = 'Thời lượng tệp ghi âm vượt quá giới hạn tối đa cho phép (45 giây).'
+            else:
+                has_error = True
+                error_msg = 'Tệp âm thanh không hợp lệ hoặc không thể phân tích.'
+        except subprocess.TimeoutExpired:
+            has_error = True
+            error_msg = 'Quá thời gian phân tích thời lượng tệp ghi âm (Metadata Timeout).'
+        except Exception as e:
+            has_error = True
+            error_msg = f'Lỗi phân tích cú pháp tệp tin: {str(e)}'
+
+        if has_error:
+            try:
+                if task.audio_file and os.path.exists(task.audio_file.path):
+                    task.audio_file.delete()
+                task.delete()
+            finally:
+                refund_volume_limit(rate_limit_user_id, audio_file.size)
+            return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
 
         process_audio_task.apply_async(
             args=[

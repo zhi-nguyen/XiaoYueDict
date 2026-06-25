@@ -6,7 +6,7 @@ from .models import ZhExample
 from core_project.ws_utils import ws_notify
 
 @shared_task(bind=True, max_retries=5, default_retry_delay=5)
-def translate_pure_text_task(self, text_input, user_id=None):
+def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi'):
     """
     Celery task to handle async translation via Database lookup or Vertex AI Priority PayGo.
     """
@@ -24,46 +24,51 @@ def translate_pure_text_task(self, text_input, user_id=None):
             )
         return result
 
-    # Tầng 1: Kiểm tra Database (ZhExample)
-    # Sử dụng iregex cho phép dấu câu tùy chọn ở cuối
-    regex_pattern = r'^' + re.escape(cleaned_query) + r'[。，、！？. , ! ?]*$'
-    match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
-    if match:
-        result = {
-            'translatedText': match.vietnamese,
-            'source': 'database',
-            'status': 'SUCCESS'
-        }
-        if user_id:
-            ws_notify(
-                user_id=user_id,
-                event_type='translation_complete',
-                title='Dịch thuật hoàn tất',
-                payload={'task_id': self.request.id, **result}
-            )
-        return result
+    # Tầng 1: Kiểm tra Database (Chỉ dịch từ tiếng Trung sang tiếng Việt mới tra cứu DB)
+    if direction == 'zh_vi':
+        # Tầng 1.1: Kiểm tra Database (ZhExample)
+        # Sử dụng iregex cho phép dấu câu tùy chọn ở cuối
+        regex_pattern = r'^' + re.escape(cleaned_query) + r'[。，、！？. , ! ?]*$'
+        match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
+        if match:
+            result = {
+                'translatedText': match.vietnamese,
+                'source': 'database',
+                'status': 'SUCCESS'
+            }
+            if user_id:
+                ws_notify(
+                    user_id=user_id,
+                    event_type='translation_complete',
+                    title='Dịch thuật hoàn tất',
+                    payload={'task_id': self.request.id, **result}
+                )
+            return result
 
-    # Tầng 1.2: Kiểm tra Database (ZhWord)
-    from django.db.models import Q
-    from .models import ZhWord
-    word_match = ZhWord.objects.filter(Q(word=cleaned_query) | Q(traditional=cleaned_query)).first()
-    if word_match:
-        result = {
-            'translatedText': word_match.translation_vi,
-            'source': 'database',
-            'status': 'SUCCESS'
-        }
-        if user_id:
-            ws_notify(
-                user_id=user_id,
-                event_type='translation_complete',
-                title='Dịch thuật hoàn tất',
-                payload={'task_id': self.request.id, **result}
-            )
-        return result
+        # Tầng 1.2: Kiểm tra Database (ZhWord)
+        from django.db.models import Q
+        from .models import ZhWord
+        word_match = ZhWord.objects.filter(Q(word=cleaned_query) | Q(traditional=cleaned_query)).first()
+        if word_match:
+            result = {
+                'translatedText': word_match.translation_vi,
+                'source': 'database',
+                'status': 'SUCCESS'
+            }
+            if user_id:
+                ws_notify(
+                    user_id=user_id,
+                    event_type='translation_complete',
+                    title='Dịch thuật hoàn tất',
+                    payload={'task_id': self.request.id, **result}
+                )
+            return result
 
     # Tầng 2: Gọi AI (Vertex AI Priority PayGo)
-    system_prompt = "Bạn là một chuyên gia dịch thuật tiếng Trung sang tiếng Việt. Hãy dịch một cách mượt mà và tự nhiên nhất, chỉ trả về kết quả, không giải thích gì thêm."
+    if direction == 'vi_zh':
+        system_prompt = "Bạn là một chuyên gia dịch thuật tiếng Việt sang tiếng Trung. Hãy dịch một cách mượt mà và tự nhiên nhất, chỉ trả về kết quả tiếng Trung (giản thể), không giải thích gì thêm."
+    else:
+        system_prompt = "Bạn là một chuyên gia dịch thuật tiếng Trung sang tiếng Việt. Hãy dịch một cách mượt mà và tự nhiên nhất, chỉ trả về kết quả, không giải thích gì thêm."
     
     try:
         translated_text = None
@@ -98,7 +103,7 @@ def translate_pure_text_task(self, text_input, user_id=None):
                 'status': 'SUCCESS'
             }
             # Lưu trữ kết quả AI dịch thuật thành công dài hạn (7 ngày) chống lặp cuộc gọi LLM
-            cache.set(f"ai_trans:{text_input}", {"status": "success", "result": result_data}, timeout=7 * 24 * 60 * 60)
+            cache.set(f"ai_trans:{direction}:{text_input}", {"status": "success", "result": result_data}, timeout=7 * 24 * 60 * 60)
             if user_id:
                 ws_notify(
                     user_id=user_id,

@@ -47,13 +47,19 @@ import uuid
 
 class WsTokenView(APIView):
     """
-    POST /api/v1/users/ws-token/
+    GET/POST /api/v1/users/ws-token/
     Issues a short-lived JWT (2 minutes) specifically for WebSocket handshake.
     The token includes purpose='websocket' to prevent reuse as an access token.
     """
     permission_classes = [permissions.AllowAny]
 
+    def get(self, request):
+        return self._generate_token(request)
+
     def post(self, request):
+        return self._generate_token(request)
+
+    def _generate_token(self, request):
         now = datetime.now(timezone.utc)
         
         if request.user.is_authenticated:
@@ -61,7 +67,10 @@ class WsTokenView(APIView):
             username = request.user.username
         else:
             # Guest logic
-            guest_id = request.data.get('guest_id')
+            if request.method == 'GET':
+                guest_id = request.query_params.get('guest_id')
+            else:
+                guest_id = request.data.get('guest_id')
             if not guest_id or not str(guest_id).startswith('guest_'):
                 guest_id = f"guest_{uuid.uuid4().hex[:12]}"
             user_id = str(guest_id)
@@ -189,8 +198,11 @@ class CookieTokenLogoutView(APIView):
 
 
 import os
+import logging
 import firebase_admin
 from firebase_admin import credentials, auth as firebase_auth
+
+logger = logging.getLogger(__name__)
 
 # Initialize Firebase Admin SDK
 firebase_key_path = os.path.join(settings.BASE_DIR, 'cnen-auth-key.json')

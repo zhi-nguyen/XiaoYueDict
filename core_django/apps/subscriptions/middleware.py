@@ -68,8 +68,13 @@ class VolumeLimitMiddleware(MiddlewareMixin):
                 return JsonResponse({'error': 'Invalid Content-Length header'}, status=400)
 
             # 2. Định danh đối tượng truy cập (Hỗ trợ tài khoản và tài khoản khách IP)
+            # Nếu request.user được xác thực qua session (ví dụ: Django Admin), ta coi như chưa có JWT auth.
+            # Điều này tránh việc bị split-brain authentication giữa Django session và JWT token.
+            # Trong unit tests (không dùng session), request.user được gán trực tiếp sẽ được giữ nguyên.
             user = request.user
-            if not user or not user.is_authenticated:
+            is_session_auth = hasattr(request, 'session') and '_auth_user_id' in request.session
+            
+            if not user or not user.is_authenticated or is_session_auth:
                 try:
                     from core_project.authentication import CookieJWTAuthentication
                     cookie_auth = CookieJWTAuthentication()
@@ -77,6 +82,9 @@ class VolumeLimitMiddleware(MiddlewareMixin):
                     if auth_result:
                         user, _ = auth_result
                         request.user = user
+                    elif is_session_auth:
+                        # Nếu đăng nhập qua session nhưng không có JWT hợp lệ, coi như Anonymous/Guest đối với API
+                        user = None
                 except Exception as e:
                     logger.warning(f"Failed to authenticate Cookie JWT in VolumeLimitMiddleware: {e}")
 
@@ -97,6 +105,7 @@ class VolumeLimitMiddleware(MiddlewareMixin):
 
             # Lưu lại rate_limit_user_id để views/tasks có thể truy cập
             request.rate_limit_user_id = user_id
+            logger.warning(f"VolumeLimitMiddleware [DEBUG]: request.user={user}, rate_limit_user_id={user_id}, tier={tier}")
 
             # 3. Truy vấn cấu hình giới hạn dung lượng (Bytes) từ Redis Hash
             config_key = f"config:volume:{tier}"

@@ -316,6 +316,40 @@ services:
     networks:
       - xiaoyue-network
 
+  # ── TTS Service ──
+  tts-service:
+    build:
+      context: ./tts_service
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./tts_service/cache:/app/cache
+      - ./core_django/key.json:/app/key.json:ro
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
+      - GS_BUCKET_NAME=${GS_BUCKET_NAME:-cnen-bucket}
+      - DEFAULT_ZH_VOICE=zh-CN-XiaoxiaoNeural
+      - DEFAULT_EN_VOICE=en-US-AriaNeural
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
+  # ── Image Service ──
+  image-service:
+    build:
+      context: ./image_service
+    ports:
+      - "127.0.0.1:8003:8003"
+    volumes:
+      - ./image_service/cache:/app/cache
+      - ./core_django/key.json:/app/key.json:ro
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
+      - GS_BUCKET_NAME=${GS_BUCKET_NAME:-cnen-bucket}
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
 # ── Volumes ──
 volumes:
   postgres_data:

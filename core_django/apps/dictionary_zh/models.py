@@ -36,6 +36,7 @@ class ZhWord(models.Model):
     
     # URL file âm thanh (nếu có)
     audio_url = models.URLField(max_length=500, blank=True)
+    image_url = models.URLField(max_length=500, blank=True)
 
     class Meta:
         unique_together = ('word', 'pinyin', 'hsk_level')
