@@ -56,8 +56,8 @@ db.sqlite3-journal
 core_django/media/
 core_django/audio_temp/
 core_django/staticfiles/
-media/
-audio_temp/
+/media/
+/audio_temp/
 
 # ── Node / Next.js ──
 node_modules/
