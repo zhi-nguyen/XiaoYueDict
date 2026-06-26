@@ -52,7 +52,7 @@ class GetWordImageView(APIView):
         else:
             guest_id = request.query_params.get('guest_id')
             if guest_id:
-                user_id = f"guest_{guest_id}"
+                user_id = guest_id if str(guest_id).startswith('guest_') else f"guest_{guest_id}"
 
         # Acquire lock for 5 minutes
         cache.set(lock_key, True, timeout=300)

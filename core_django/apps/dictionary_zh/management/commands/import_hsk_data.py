@@ -137,11 +137,11 @@ class Command(BaseCommand):
 
             with transaction.atomic():
                 if words_to_create:
-                    ZhWord.objects.bulk_create(words_to_create, batch_size=1000)
+                    ZhWord.objects.bulk_create(words_to_create, batch_size=1000, ignore_conflicts=True)
                     total_words_imported += len(words_to_create)
 
                 if examples_to_create:
-                    ZhExample.objects.bulk_create(examples_to_create, batch_size=2000)
+                    ZhExample.objects.bulk_create(examples_to_create, batch_size=2000, ignore_conflicts=True)
                     total_examples_imported += len(examples_to_create)
                     
             self.stdout.write(self.style.SUCCESS(f"  -> Finished {level}.json (Imported {len(words_to_create)} words)"))

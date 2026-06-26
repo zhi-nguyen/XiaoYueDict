@@ -4,7 +4,7 @@ from django.db import models
 from django.contrib.postgres.indexes import GinIndex
 
 class ZhWord(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    id = models.UUIDField(primary_key=True, editable=False)
     word = models.CharField(max_length=50, db_index=True) # Từ vựng (VD: 爱)
     traditional = models.CharField(max_length=50, blank=True) # Phồn thể
     
@@ -48,6 +48,11 @@ class ZhWord(models.Model):
 
     def __str__(self):
         return f"{self.word} ({self.pinyin})"
+
+    def save(self, *args, **kwargs):
+        if not self.id and self.word:
+            self.id = uuid.uuid5(uuid.NAMESPACE_DNS, self.word)
+        super().save(*args, **kwargs)
 
 from django.contrib.postgres.search import SearchVectorField, SearchVector
 from django.db.models import Value

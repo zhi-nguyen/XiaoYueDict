@@ -22,35 +22,44 @@ def get_word_by_id(word_id, lang):
         return None
 
 
-def _resolve_prompt_keyword(word_id, lang, word):
+def _resolve_image_prompt(word_id, lang, word):
     """
-    Chiến lược Ưu tiên Dữ liệu Đầu vào (Prompt Injection Priority):
-    
-    1. ZhEnMapping.en_translation (sanitized keyword) — ưu tiên tuyệt đối
-    2. ZhWord.translation_en (first keyword) — graceful degradation
-    3. word.word (từ vựng gốc) — last resort
-    
-    Returns: clean English keyword string for AI prompt
+    Chiến lược xây dựng Prompt cho AI tạo ảnh:
+    1. Nếu có ZhEnMapping.image_caption: dùng nó để dựng prompt trực quan.
+    2. Nếu không có: dùng phương án fallback (graceful degradation) dựa trên từ nghĩa tiếng Anh của từ.
     """
+    caption = ""
     try:
         if lang == 'zh':
-            mapping = ZhEnMapping.objects.filter(zh_word_id=word_id).first()
+            mapping = ZhEnMapping.objects.filter(zh_word_id=word_id).select_related('en_word').first()
         else:
-            mapping = ZhEnMapping.objects.filter(en_word_id=word_id).first()
+            mapping = ZhEnMapping.objects.filter(en_word_id=word_id).select_related('en_word').first()
 
-        if mapping and mapping.en_translation:
-            return mapping.en_translation
+        if mapping and mapping.image_caption:
+            caption = mapping.image_caption
+        elif mapping and mapping.en_word:
+            caption = f"the word '{mapping.en_word.word}'"
     except Exception as e:
         logger.warning(f"ZhEnMapping lookup failed for {word_id}: {e}")
 
-    # Graceful Degradation: fallback to translation_en field
-    translation_en = getattr(word, 'translation_en', '') or ''
-    if translation_en:
-        first_keyword = translation_en.split(',')[0].strip()
-        if first_keyword:
-            return first_keyword
+    # Fallback if no caption found
+    if not caption:
+        translation_en = getattr(word, 'translation_en', '') or ''
+        if translation_en:
+            first_keyword = translation_en.split(',')[0].strip()
+            if first_keyword:
+                caption = f"the concept of '{first_keyword}'"
+        
+    if not caption:
+        caption = f"the concept of '{word.word}'"
 
-    return word.word
+    # Xây dựng prompt hoàn chỉnh với phong cách thiết kế phẳng (flat design vector)
+    if lang == 'zh':
+        prompt = f"Flat design educational vector illustration of {caption} ({word.word}). Modern clean graphic style, solid white background, no texts, no words, no letters, no typography."
+    else:
+        prompt = f"Flat design educational vector illustration of {caption}. Modern clean graphic style, solid white background, no texts, no words, no letters, no typography."
+        
+    return prompt
 
 
 @shared_task
@@ -64,13 +73,8 @@ def generate_word_image_task(word_id, lang, user_id):
         cache.delete(redis_key)
         return
         
-    # Build a high quality prompt — Ưu tiên tuyệt đối ZhEnMapping.en_translation
-    # (sanitized keyword) thay vì ZhWord.translation_en (có noise data)
-    clean_keyword = _resolve_prompt_keyword(word_id, lang, word)
-    if lang == 'zh':
-        prompt = f"Flat design educational vector illustration visualizing the concept of the Chinese word '{clean_keyword}' ({word.word}). Modern clean graphic style, solid white background, no texts, no words, no letters, no typography."
-    else:
-        prompt = f"Flat design educational vector illustration visualizing the concept of the word '{clean_keyword}'. Modern clean graphic style, solid white background, no texts, no words, no letters, no typography."
+    # Build a high quality prompt — Ưu tiên tuyệt đối ZhEnMapping.image_caption
+    prompt = _resolve_image_prompt(word_id, lang, word)
     try:
         res = requests.post(IMAGE_SERVICE_URL, json={
             "word_id": str(word_id),

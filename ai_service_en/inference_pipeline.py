@@ -319,18 +319,56 @@ class EnglishPronunciationScorer:
         # Step 2: ASR transcription for word-level detail
         asr_result = self._transcribe(audio_path)
 
+        # Guard: No speech detected — early return with zero scores
+        if not asr_result["words"] and not asr_result["text"].strip():
+            elapsed = time.time() - start
+            logger.warning(
+                f"⚠️ Read-Aloud: No speech detected (VAD removed all audio). "
+                f"Elapsed: {elapsed:.3f}s"
+            )
+            target_words = target_text.strip().split()
+            return {
+                "overall_score": 0.0,
+                "word_scores": [
+                    {"word": w, "start_time": 0.0, "end_time": 0.0,
+                     "score": 0.0, "confidence": 0.0, "matched": False}
+                    for w in target_words
+                ],
+                "transcript": "",
+                "target_text": target_text,
+                "language": "en",
+                "warning": "No speech detected in the audio recording.",
+            }
+
         # Step 3: Blend model score with ASR confidence
         overall_score = self._blend_scores(model_score, asr_result["words"])
+
+        # Step 4: Build word scores from ASR confidence + scorer
+        word_scores = self._build_word_scores_from_asr(
+            asr_result["words"], target_text, overall_score, audio_path
+        )
+
+        # Step 5: Penalize overall score based on content match ratio
+        # The model scores pronunciation quality, but doesn't know if the
+        # spoken content matches the target.  If the user reads a completely
+        # different sentence, all word_scores will be unmatched and the
+        # overall_score must reflect that.
+        total_words = max(len(word_scores), 1)
+        matched_count = sum(1 for ws in word_scores if ws.get("matched", False))
+        match_ratio = matched_count / total_words
+
+        if match_ratio < 1.0:
+            pre_penalty = overall_score
+            overall_score = round(overall_score * match_ratio, 2)
+            logger.info(
+                f"📉 Content match penalty: {matched_count}/{total_words} words matched "
+                f"({match_ratio:.0%}). Score {pre_penalty} → {overall_score}"
+            )
 
         elapsed = time.time() - start
         logger.info(
             f"⏱️ Read-Aloud completed in {elapsed:.3f}s — "
             f"raw={raw_score:.4f}, model={model_score}, overall={overall_score}"
-        )
-
-        # Step 4: Build word scores from ASR confidence + scorer
-        word_scores = self._build_word_scores_from_asr(
-            asr_result["words"], target_text, overall_score, audio_path
         )
 
         return {
@@ -378,6 +416,20 @@ class EnglishPronunciationScorer:
 
         # Step 2: ASR transcription
         asr_result = self._transcribe(audio_path)
+
+        # Guard: No speech detected
+        if not asr_result["words"] and not asr_result["text"].strip():
+            elapsed = time.time() - start
+            logger.warning(
+                f"⚠️ Free Decoding: No speech detected. Elapsed: {elapsed:.3f}s"
+            )
+            return {
+                "recognized_text": "(No speech detected)",
+                "fluency_score": 0.0,
+                "details": [],
+                "language": "en",
+                "warning": "No speech detected in the audio recording.",
+            }
 
         # Step 3: Blend model score with ASR confidence
         fluency_score = self._blend_scores(model_score, asr_result["words"])
@@ -441,7 +493,9 @@ class EnglishPronunciationScorer:
         Additionally, applies a penalty for any words spoken with low confidence (< 0.80).
         """
         if not asr_words:
-            return model_score
+            # No speech detected by ASR/VAD — model score is unreliable on silence/noise
+            logger.warning("⚠️ No ASR words detected — returning floor score")
+            return self.floor_score
 
         probabilities = [w["probability"] for w in asr_words]
         avg_confidence = np.mean(probabilities)

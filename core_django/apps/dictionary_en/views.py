@@ -6,6 +6,9 @@ from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from django.core.cache import cache
 from celery.result import AsyncResult
 import re
+from django.db.models import Q, Case, When, Value, IntegerField, F, Exists, OuterRef
+from django.contrib.postgres.search import SearchQuery
+from django.db.models.functions import Length, StrIndex
 
 from .models import EnWord, EnExample
 from .serializers import EnWordSerializer
@@ -27,10 +30,44 @@ class EnWordSearchView(generics.ListAPIView):
             query_word_len = len(query.split())
 
             if 1 <= query_word_len <= 30:
-                cleaned_query = re.sub(r'[. , ! ?]+$', '', query)
-                match = EnExample.objects.filter(english__iexact=cleaned_query).first()
+                cleaned_query_end = re.sub(r'[. , ! ?]+$', '', query)
+                cleaned_for_search = re.sub(r'[. , ! ? : ; ( ) \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
+                
+                # Step 1: Exact full-sentence match (highest priority)
+                match = EnExample.objects.filter(english__iexact=cleaned_query_end).first()
+                
+                # Step 2: Word boundary match for single-word queries
+                # Uses PostgreSQL \y (word boundary) to prevent "search" matching "research"
+                if not match and cleaned_for_search and query_word_len == 1:
+                    word_boundary_pattern = r'\y' + re.escape(cleaned_for_search) + r'\y'
+                    match = (
+                        EnExample.objects
+                        .filter(english__iregex=word_boundary_pattern)
+                        .order_by(Length('english'))
+                        .first()
+                    )
+                
+                # Step 3: icontains fallback for multi-word queries, prefer shorter sentences
+                if not match and cleaned_for_search and query_word_len > 1:
+                    match = (
+                        EnExample.objects
+                        .filter(english__icontains=cleaned_for_search)
+                        .order_by(Length('english'))
+                        .first()
+                    )
+                
+                # Step 4: Vietnamese translation fallback
+                if not match and cleaned_for_search:
+                    match = (
+                        EnExample.objects
+                        .filter(vietnamese__icontains=cleaned_for_search)
+                        .order_by(Length('vietnamese'))
+                        .first()
+                    )
+                
                 if match:
                     exact_example = {
+                        'id': str(match.id),
                         'english': match.english,
                         'vietnamese': match.vietnamese
                     }
@@ -73,9 +110,95 @@ class EnWordSearchView(generics.ListAPIView):
 
     def get_queryset(self):
         query = self.request.query_params.get('q', '').strip()
-        if not query:
-            return EnWord.objects.prefetch_related('examples').all()
-        return EnWord.objects.prefetch_related('examples').filter(word__iexact=query)
+        
+        # Base Queryset with prefetch to solve N+1 Problem
+        queryset = EnWord.objects.prefetch_related('examples')
+        
+        # Clean query: strip English punctuation
+        cleaned_query = re.sub(r'[. , ! ? : ; ( ) \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
+            
+        if not cleaned_query:
+            # If no query, return empty or all words ordered alphabetically
+            return queryset.order_by('word')
+
+        q_lower = cleaned_query.lower()
+        
+        # SearchQuery for FTS Search
+        query_obj = SearchQuery(cleaned_query, config='english')
+        
+        # --- Pre-filtering optimization ---
+        filter_q = Q(word__iexact=cleaned_query) | Q(word__istartswith=cleaned_query)
+        
+        if len(cleaned_query) >= 2:
+            filter_q |= Q(translation_vi__icontains=q_lower)
+            
+            # Find matching word IDs from examples
+            example_word_ids = list(
+                EnExample.objects.filter(
+                    Q(search_vector=query_obj) | Q(vietnamese__icontains=cleaned_query)
+                ).values_list('word_id', flat=True).distinct()
+            )
+            if example_word_ids:
+                filter_q |= Q(id__in=example_word_ids)
+                
+            # Generate substrings of query for fast word_idx match
+            substrings = []
+            for i in range(len(cleaned_query)):
+                for j in range(i + 2, len(cleaned_query) + 1):
+                    sub = cleaned_query[i:j].strip()
+                    if sub and len(sub) >= 2:
+                        substrings.append(sub)
+            substrings = list(set(substrings))
+            if substrings:
+                filter_q |= Q(word__in=substrings)
+                
+        queryset = queryset.filter(filter_q)
+        
+        # 0. Subquery to check for example match without causing joins
+        has_example_match = Exists(
+            EnExample.objects.filter(word_id=OuterRef('pk')).filter(
+                Q(search_vector=query_obj) | Q(vietnamese__icontains=cleaned_query)
+            )
+        )
+        
+        # 1. Annotate word length and reverse match index
+        queryset = queryset.annotate(
+            word_len=Length('word'),
+            word_idx=StrIndex(Value(cleaned_query), F('word'))
+        )
+        
+        # 2. Comprehensive search logic covering all cases
+        queryset = queryset.annotate(
+            match_level=Case(
+                When(word__iexact=cleaned_query, then=Value(1)),
+                When(word__istartswith=cleaned_query, then=Value(2)),
+                When(translation_vi__icontains=q_lower, then=Value(3)),
+                When(has_example_match, then=Value(4)),
+                When(word_idx__gt=0, then=Value(5)),
+                default=Value(999999),
+                output_field=IntegerField(),
+            )
+        )
+        
+        # 3. Conditional sorting length exclusively for Match Level 5
+        queryset = queryset.annotate(
+            reverse_sort_len=Case(
+                When(match_level=5, then=F('word_len')),
+                default=Value(0),
+                output_field=IntegerField(),
+            )
+        )
+
+        # 4. Filter and Distinct
+        if len(cleaned_query) >= 2:
+            queryset = queryset.filter(match_level__lte=5)
+        else:
+            queryset = queryset.filter(match_level__lte=4)
+            
+        # 5. Final Sort Order
+        queryset = queryset.order_by('match_level', '-reverse_sort_len', 'word')
+        
+        return queryset
 
 
 class EnPureTextTranslationView(APIView):

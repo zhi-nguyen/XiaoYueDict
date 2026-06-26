@@ -206,9 +206,6 @@ logger = logging.getLogger(__name__)
 
 # Initialize Firebase Admin SDK
 firebase_key_path = os.path.join(settings.BASE_DIR, 'cnen-auth-key.json')
-if not os.path.exists(firebase_key_path):
-    firebase_key_path = os.path.join(settings.BASE_DIR, 'key.json')
-
 if not firebase_admin._apps:
     try:
         cred = credentials.Certificate(firebase_key_path)

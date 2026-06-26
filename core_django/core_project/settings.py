@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     'apps.gamification',
     'apps.notifications',
     'apps.media',
+    'apps.reports',
     'rest_framework_simplejwt',
 ]
 

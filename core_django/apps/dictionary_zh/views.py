@@ -56,6 +56,7 @@ class ZhWordSearchView(generics.ListAPIView):
                     
                     if match:
                         exact_example = {
+                            'id': str(match.id),
                             'chinese': match.chinese,
                             'pinyin': match.pinyin,
                             'vietnamese': match.vietnamese
@@ -136,10 +137,43 @@ class ZhWordSearchView(generics.ListAPIView):
         tokenized_query = " ".join(jieba.cut(cleaned_query))
         query_obj = SearchQuery(tokenized_query, config='simple')
         
+        # --- Pre-filtering optimization ---
+        filter_q = Q(word__exact=cleaned_query) | Q(traditional__exact=cleaned_query) | \
+                   Q(toneless_pinyin__iexact=q_lower) | Q(pinyin__iexact=q_lower) | \
+                   Q(word__startswith=cleaned_query) | Q(traditional__startswith=cleaned_query) | \
+                   Q(toneless_pinyin__istartswith=q_lower) | Q(pinyin__istartswith=q_lower)
+        
+        if len(cleaned_query) >= 2:
+            filter_q |= Q(translation_en__iexact=q_lower) | Q(han_viet__iexact=q_lower) | \
+                       Q(translation_vi__icontains=q_lower) | Q(han_viet__icontains=q_lower) | \
+                       Q(translation_en__icontains=q_lower)
+            
+            # Find matching word IDs from examples
+            example_word_ids = list(
+                ZhExample.objects.filter(
+                    Q(search_vector=query_obj) | Q(vietnamese__icontains=cleaned_query)
+                ).values_list('word_id', flat=True).distinct()
+            )
+            if example_word_ids:
+                filter_q |= Q(id__in=example_word_ids)
+                
+            # Generate substrings of query for fast word_idx match
+            substrings = []
+            for i in range(len(cleaned_query)):
+                for j in range(i + 2, len(cleaned_query) + 1):
+                    sub = cleaned_query[i:j].strip()
+                    if sub and len(sub) >= 2:
+                        substrings.append(sub)
+            substrings = list(set(substrings))
+            if substrings:
+                filter_q |= Q(word__in=substrings)
+                
+        queryset = queryset.filter(filter_q)
+        
         # 0. Subquery to check for example match without causing joins
         has_example_match = Exists(
             ZhExample.objects.filter(word_id=OuterRef('pk')).filter(
-                Q(chinese__icontains=cleaned_query) | Q(vietnamese__icontains=cleaned_query)
+                Q(search_vector=query_obj) | Q(vietnamese__icontains=cleaned_query)
             )
         )
         
