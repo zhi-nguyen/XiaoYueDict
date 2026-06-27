@@ -26,7 +26,7 @@ class NotebookListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Notebook
-        fields = ['id', 'name', 'description', 'word_count', 'word_count_annotated', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'description', 'lang', 'word_count', 'word_count_annotated', 'created_at', 'updated_at']
         read_only_fields = ['id', 'word_count', 'word_count_annotated', 'created_at', 'updated_at']
 
 
@@ -38,7 +38,7 @@ class NotebookDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Notebook
-        fields = ['id', 'name', 'description', 'word_count', 'word_count_annotated', 'words', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'description', 'lang', 'word_count', 'word_count_annotated', 'words', 'created_at', 'updated_at']
         read_only_fields = ['id', 'word_count', 'word_count_annotated', 'created_at', 'updated_at']
 
 
@@ -46,7 +46,7 @@ class NotebookCreateSerializer(serializers.ModelSerializer):
     """Tạo sổ — chỉ cần tên."""
     class Meta:
         model = Notebook
-        fields = ['name', 'description']
+        fields = ['name', 'description', 'lang']
 
 
 class PDFExportTaskSerializer(serializers.ModelSerializer):

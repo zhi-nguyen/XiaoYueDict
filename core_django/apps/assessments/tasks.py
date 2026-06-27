@@ -109,6 +109,64 @@ def upload_to_gcs(local_path: str, target_blob_name: str, bucket_name: str) -> s
         logger.error(f"❌ Failed to upload {local_path} to GCS: {e}")
         raise e
 
+def execute_task_refund(task_id, rate_limit_user_id) -> bool:
+    """
+    Core business logic for executing a refund on an AssessmentTask.
+    1. Acquire atomic lock (update refund_status from NOT_REFUNDED to PENDING)
+    2. Execute refund_volume_limit
+    3. Update final refund_status (SUCCESS / FAILED)
+    Returns True if refund was successfully executed, False otherwise.
+    """
+    try:
+        updated = AssessmentTask.objects.filter(
+            id=task_id,
+            refund_status='NOT_REFUNDED'
+        ).update(refund_status='PENDING')
+        
+        if not updated:
+            logger.info(f"Refund lock not acquired for task {task_id} (already pending or completed).")
+            return False
+            
+        task = AssessmentTask.objects.get(id=task_id)
+        file_size = 0
+        try:
+            if task.audio_file and os.path.exists(task.audio_file.path):
+                file_size = os.path.getsize(task.audio_file.path)
+            elif task.audio_file:
+                file_size = task.audio_file.size
+        except Exception as e:
+            logger.warning(f"Could not determine file size for refund: {e}")
+
+        if file_size > 0 and rate_limit_user_id:
+            refund_volume_limit(rate_limit_user_id, file_size)
+            logger.info(f"Successfully refunded {file_size} bytes to user {rate_limit_user_id} for task {task_id}.")
+            
+        task.refund_status = 'SUCCESS'
+        task.save(update_fields=['refund_status'])
+        return True
+    except Exception as e:
+        logger.error(f"Error executing refund for task {task_id}: {e}")
+        AssessmentTask.objects.filter(id=task_id).update(refund_status='FAILED')
+        return False
+
+
+@shared_task(max_retries=1, default_retry_delay=5)
+def process_refund_task(task_id, rate_limit_user_id):
+    """
+    Asynchronous task to process refund for a timed-out AssessmentTask.
+    """
+    logger.info(f"Starting async refund process for task {task_id}...")
+    try:
+        task = AssessmentTask.objects.get(id=task_id)
+        task.status = 'FAILED'
+        task.error_message = 'Timeout'
+        task.save(update_fields=['status', 'error_message'])
+    except AssessmentTask.DoesNotExist:
+        logger.error(f"Task {task_id} not found during refund.")
+        return False
+        
+    return execute_task_refund(task_id, rate_limit_user_id)
+
 
 # ── Celery Task ───────────────────────────────────────────────
 
@@ -127,12 +185,22 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
       4. Cleanup all temp audio files
     """
     converted_path = None  # track for cleanup
+    is_retrying = False
 
     try:
         task = AssessmentTask.objects.get(id=assessment_id)
     except AssessmentTask.DoesNotExist:
         logger.error(f"AssessmentTask {assessment_id} not found.")
         return {"error": "Task not found"}
+
+    # Abort if the task was already cancelled by the user via refund timeout, or is already completed
+    if task.status == 'FAILED' and task.error_message == 'Timeout':
+        logger.info(f"Task {assessment_id} was cancelled by user timeout. Aborting execution.")
+        return {"status": "aborted", "reason": "user_timeout"}
+
+    if task.status == 'COMPLETED':
+        logger.info(f"Task {assessment_id} is already COMPLETED. Aborting execution.")
+        return {"status": "aborted", "reason": "already_completed"}
 
     # Reconstruct rate_limit_user_id if not provided
     if not rate_limit_user_id:
@@ -295,26 +363,59 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
         task.error_message = f"Audio file not found: {str(exc)}"
         task.save(update_fields=['status', 'error_message'])
         
-        # Gửi thông báo WebSocket thất bại
-        ws_notify(
-            user_id=user_id,
-            event_type='score_failed',
-            title='Chấm điểm thất bại (Không tìm thấy tệp âm thanh)',
-            payload={
-                'task_id': str(assessment_id),
-                'error': task.error_message,
-                'language': language,
-            },
-        )
+        # Execute refund atomically
+        execute_task_refund(str(assessment_id), rate_limit_user_id)
         
-        if rate_limit_user_id and file_size:
-            refund_volume_limit(rate_limit_user_id, file_size)
+        # Gửi thông báo WebSocket thất bại
+        try:
+            ws_notify(
+                user_id=user_id,
+                event_type='score_failed',
+                title='Chấm điểm thất bại (Không tìm thấy tệp âm thanh)',
+                payload={
+                    'task_id': str(assessment_id),
+                    'error': task.error_message,
+                    'language': language,
+                },
+            )
+        except Exception as ws_err:
+            logger.error(f"⚠️ Failed to send WS notification for task {assessment_id}: {ws_err}")
+            
         return {"status": "error", "reason": "file_not_found_on_disk"}
 
     except (RequestException, Exception) as exc:
         logger.error(f"❌ Error processing {assessment_id}: {exc}")
-        # Quản lý cơ chế retry đối với các sự cố gián đoạn mạng hoặc lỗi hệ thống
-        try:
+        
+        def finalize_failure(error_msg):
+            task.status = 'FAILED'
+            task.error_message = error_msg
+            task.save(update_fields=['status', 'error_message'])
+            
+            # Execute refund atomically
+            execute_task_refund(str(assessment_id), rate_limit_user_id)
+            
+            # Gửi thông báo WebSocket thất bại
+            try:
+                ws_notify(
+                    user_id=user_id,
+                    event_type='score_failed',
+                    title='Chấm điểm thất bại (Hết lượt thử lại)',
+                    payload={
+                        'task_id': str(assessment_id),
+                        'error': task.error_message,
+                        'language': language,
+                    },
+                )
+            except Exception as ws_err:
+                logger.error(f"⚠️ Failed to send WS notification for task {assessment_id}: {ws_err}")
+
+        # Kiểm tra xem đã đạt đến số lần thử lại tối đa chưa
+        if self.request.retries >= self.max_retries:
+            logger.warning(f"⚠️ Max retries reached ({self.request.retries}/{self.max_retries}) for task {assessment_id}. Finalizing failure.")
+            finalize_failure(f"Max retries exceeded: {str(exc)}")
+            return {"status": "error", "reason": "system_max_retries_exhausted"}
+            
+        else:
             countdown = 5
             # Nếu gặp lỗi 503 từ AI service, có thể chờ lâu hơn
             if hasattr(exc, 'response') and exc.response is not None and exc.response.status_code == 503:
@@ -324,49 +425,23 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
                 task.error_message = error_detail
                 task.save(update_fields=['status', 'error_message'])
             else:
-                task.status = 'FAILED'
-                task.error_message = str(exc)
+                # Giữ trạng thái là PROCESSING khi đang thử lại
+                task.status = 'PROCESSING'
+                task.error_message = f"Attempt {self.request.retries + 1} failed: {str(exc)}"
                 task.save(update_fields=['status', 'error_message'])
 
-            raise self.retry(exc=exc, countdown=countdown)
-
-        except MaxRetriesExceededError:
-            # Đã chạm ngưỡng thử lại tối đa. Hệ thống chính thức hủy bỏ tác vụ.
-            # Tiến hành hoàn trả dung lượng tài nguyên cho người dùng.
-            task.status = 'FAILED'
-            task.error_message = f"Max retries exceeded: {str(exc)}"
-            task.save(update_fields=['status', 'error_message'])
-            
-            # Gửi thông báo WebSocket thất bại
-            ws_notify(
-                user_id=user_id,
-                event_type='score_failed',
-                title='Chấm điểm thất bại (Hết lượt thử lại)',
-                payload={
-                    'task_id': str(assessment_id),
-                    'error': task.error_message,
-                    'language': language,
-                },
-            )
-            
-            if rate_limit_user_id and file_size:
-                refund_volume_limit(rate_limit_user_id, file_size)
-            return {"status": "error", "reason": "system_max_retries_exhausted"}
-
-        except Retry:
-            # Task đang được Celery đưa vào hàng đợi để retry (chưa hủy hoàn toàn).
-            # Tuyệt đối không hoàn tiền tại đây.
-            raise
-
-        except Exception as inner_exc:
-            # Bất kỳ lỗi bất ngờ nào xảy ra trong quá trình xử lý ngoại lệ
-            task.status = 'FAILED'
-            task.error_message = str(inner_exc)
-            task.save(update_fields=['status', 'error_message'])
-            if rate_limit_user_id and file_size:
-                refund_volume_limit(rate_limit_user_id, file_size)
-            raise inner_exc
+            is_retrying = True
+            try:
+                raise self.retry(exc=exc, countdown=countdown)
+            except MaxRetriesExceededError:
+                logger.warning(f"⚠️ MaxRetriesExceededError raised by retry() for task {assessment_id}.")
+                finalize_failure(f"Max retries exceeded: {str(exc)}")
+                return {"status": "error", "reason": "system_max_retries_exhausted"}
 
     finally:
         # ── Step 4: Always cleanup temp audio files ──
-        cleanup_audio_files(file_path, converted_path)
+        # Do not delete the original file_path if we are retrying, so subsequent runs still have the audio
+        if is_retrying:
+            cleanup_audio_files(converted_path)
+        else:
+            cleanup_audio_files(file_path, converted_path)

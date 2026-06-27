@@ -35,6 +35,17 @@ class AssessmentTask(models.Model):
     target_text = models.TextField(blank=True, default='')
     language = models.CharField(max_length=5, choices=LANGUAGE_CHOICES, default='en')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    refund_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('NOT_REFUNDED', 'Not Refunded'),
+            ('PENDING', 'Pending Refund'),
+            ('SUCCESS', 'Refunded Successfully'),
+            ('FAILED', 'Refund Failed'),
+        ],
+        default='NOT_REFUNDED',
+        db_index=True,
+    )
     queue_name = models.CharField(
         max_length=20,
         choices=QUEUE_CHOICES,

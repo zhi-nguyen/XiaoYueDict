@@ -1,7 +1,11 @@
 import re
+import logging
 from rest_framework.response import Response
 from rest_framework import status
 from django.core.cache import cache
+
+logger = logging.getLogger(__name__)
+
 
 class AIFallbackGateway:
     @staticmethod
@@ -63,14 +67,15 @@ class AIFallbackGateway:
 
         if query and not db_hit:
             # Tra cứu bộ nhớ đệm AI (Redis Cache)
-            ai_cache_key = f"{cache_key_prefix}:{query}"
+            direction = "zh_vi" if mode == 'zh' else "en_vi"
+            ai_cache_key = f"{cache_key_prefix}:{direction}:{query}"
             cached_data = cache.get(ai_cache_key)
 
             if cached_data:
                 if cached_data.get('status') == 'success':
                     return Response(cached_data['result'])
                 if cached_data.get('status') == 'processing':
-                    return Response({"task_id": cached_data['task_id']}, status=status.HTTP_202_ACCEPTED)
+                    return Response({"status": "PENDING", "task_id": cached_data['task_id']}, status=status.HTTP_202_ACCEPTED)
 
             # Khống chế giới hạn Conditional Rate Limit (3 lần/phút)
             user = request.user
@@ -97,6 +102,12 @@ class AIFallbackGateway:
             guest_id = request.data.get("guest_id") or request.query_params.get("guest_id")
             effective_user_id = str(user.id) if user.is_authenticated else guest_id
 
+            if not effective_user_id:
+                logger.warning(
+                    f"⚠️ No user_id or guest_id found for AI search fallback task (query: {query}). "
+                    "WebSocket notification will NOT be sent."
+                )
+
             task = task_func.apply_async(
                 args=[query], 
                 kwargs={"user_id": effective_user_id} if effective_user_id else {},
@@ -119,84 +130,99 @@ class AIFallbackGateway:
         if not text_input:
             return Response({'error': 'No text provided'}, status=status.HTTP_400_BAD_REQUEST)
         
-        limit = cls.get_translation_char_limit(request.user, mode=mode)
-        text_len = cls.count_words(text_input, mode=mode)
+        direction = request.data.get("direction")
+        if not direction:
+            direction = "zh_vi" if mode == 'zh' else "en_vi"
+        
+        input_mode = 'en' if direction.startswith('vi_') else mode
+        limit = cls.get_translation_char_limit(request.user, mode=input_mode)
+        text_len = cls.count_words(text_input, mode=input_mode)
         
         if text_len > limit:
-            unit = "ký tự" if mode == 'zh' else "từ"
+            unit = "ký tự" if input_mode == 'zh' else "từ"
             msg = f"Độ dài văn bản vượt quá hạn mức cho phép của tài khoản ({limit} {unit})."
             return Response({
                 "detail": msg,
                 "error": msg
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # ── Tầng 0: Tra cứu cơ sở dữ liệu đồng bộ trước khi kích hoạt Celery / AI ──
-        q_lower = text_input.lower().strip()
-        
-        if mode == 'zh':
-            from apps.dictionary_zh.models import ZhWord, ZhExample
-            from django.db.models import Q
+        # ── Tầng 0: Tra cứu cơ sở dữ liệu đồng bộ (Chỉ áp dụng khi dịch sang Tiếng Việt) ──
+        if direction in ['zh_vi', 'en_vi']:
+            q_lower = text_input.lower().strip()
             
-            cleaned_query = re.sub(r'[。，、！？. , ! ?]+$', '', q_lower)
-            if cleaned_query:
-                # 1. Check ZhExample (exact example match)
-                regex_pattern = r'^' + re.escape(cleaned_query) + r'[。，、！？. , ! ?]*$'
-                match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
-                if match:
-                    return Response({
-                        'translatedText': match.vietnamese,
-                        'source': 'database',
-                        'status': 'SUCCESS'
-                    }, status=status.HTTP_200_OK)
+            if mode == 'zh':
+                from apps.dictionary_zh.models import ZhWord, ZhExample
+                from django.db.models import Q
                 
-                # 2. Check ZhWord (dictionary word match)
-                word_match = ZhWord.objects.filter(Q(word=cleaned_query) | Q(traditional=cleaned_query)).first()
-                if word_match:
-                    return Response({
-                        'translatedText': word_match.translation_vi,
-                        'source': 'database',
-                        'status': 'SUCCESS'
-                    }, status=status.HTTP_200_OK)
+                cleaned_query = re.sub(r'[。，、！？. , ! ?]+$', '', q_lower)
+                if cleaned_query:
+                    # 1. Check ZhExample (exact example match)
+                    regex_pattern = r'^' + re.escape(cleaned_query) + r'[。，、！？. , ! ?]*$'
+                    match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
+                    if match:
+                        return Response({
+                            'translatedText': match.vietnamese,
+                            'source': 'database',
+                            'status': 'SUCCESS'
+                        }, status=status.HTTP_200_OK)
                     
-        elif mode == 'en':
-            from apps.dictionary_en.models import EnWord, EnExample
-            
-            cleaned_query = re.sub(r'[. , ! ?]+$', '', q_lower)
-            if cleaned_query:
-                # 1. Check EnExample
-                match = EnExample.objects.filter(english__iexact=cleaned_query).first()
-                if match:
-                    return Response({
-                        'translatedText': match.vietnamese,
-                        'source': 'database',
-                        'status': 'SUCCESS'
-                    }, status=status.HTTP_200_OK)
+                    # 2. Check ZhWord (dictionary word match)
+                    word_match = ZhWord.objects.filter(Q(word=cleaned_query) | Q(traditional=cleaned_query)).first()
+                    if word_match:
+                        return Response({
+                            'translatedText': word_match.translation_vi,
+                            'source': 'database',
+                            'status': 'SUCCESS'
+                        }, status=status.HTTP_200_OK)
+                        
+            elif mode == 'en':
+                from apps.dictionary_en.models import EnWord, EnExample
                 
-                # 2. Check EnWord
-                word_match = EnWord.objects.filter(word__iexact=cleaned_query).first()
-                if word_match:
-                    return Response({
-                        'translatedText': word_match.translation_vi,
-                        'source': 'database',
-                        'status': 'SUCCESS'
-                    }, status=status.HTTP_200_OK)
+                cleaned_query = re.sub(r'[. , ! ?]+$', '', q_lower)
+                if cleaned_query:
+                    # 1. Check EnExample
+                    match = EnExample.objects.filter(english__iexact=cleaned_query).first()
+                    if match:
+                        return Response({
+                            'translatedText': match.vietnamese,
+                            'source': 'database',
+                            'status': 'SUCCESS'
+                        }, status=status.HTTP_200_OK)
+                    
+                    # 2. Check EnWord
+                    word_match = EnWord.objects.filter(word__iexact=cleaned_query).first()
+                    if word_match:
+                        return Response({
+                            'translatedText': word_match.translation_vi,
+                            'source': 'database',
+                            'status': 'SUCCESS'
+                        }, status=status.HTTP_200_OK)
 
-        ai_cache_key = f"{cache_key_prefix}:{text_input}"
+        ai_cache_key = f"{cache_key_prefix}:{direction}:{text_input}"
         cached_data = cache.get(ai_cache_key)
 
         if cached_data:
             if cached_data.get('status') == 'success':
                 return Response(cached_data['result'])
             if cached_data.get('status') == 'processing':
-                return Response({"task_id": cached_data['task_id']}, status=status.HTTP_202_ACCEPTED)
+                return Response({"status": "PENDING", "task_id": cached_data['task_id']}, status=status.HTTP_202_ACCEPTED)
 
         user = request.user
         guest_id = request.data.get("guest_id") or request.query_params.get("guest_id")
         effective_user_id = str(user.id) if user.is_authenticated else guest_id
 
+        if not effective_user_id:
+            logger.warning(
+                f"⚠️ No user_id or guest_id found for AI translation fallback task (input: {text_input[:20]}...). "
+                "WebSocket notification will NOT be sent."
+            )
+
         task = task_func.apply_async(
             args=[text_input], 
-            kwargs={"user_id": effective_user_id} if effective_user_id else {},
+            kwargs={
+                "user_id": effective_user_id,
+                "direction": direction
+            } if effective_user_id else {"direction": direction},
             queue='queue_core'
         )
         cache.set(ai_cache_key, {"status": "processing", "task_id": task.id}, timeout=5 * 60)

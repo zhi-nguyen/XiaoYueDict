@@ -46,6 +46,7 @@ async def redis_listener(manager):
 
                 try:
                     data = json.loads(raw_message["data"])
+                    logger.info(f"Received message from Redis: {data}")
                     user_id = data.get("user_id")
                     if not user_id:
                         logger.warning(f"Message missing user_id: {data}")

@@ -6,7 +6,7 @@ from .models import EnExample
 from core_project.ws_utils import ws_notify
 
 @shared_task(bind=True, max_retries=5, default_retry_delay=5)
-def translate_en_pure_text_task(self, text_input, user_id=None):
+def translate_en_pure_text_task(self, text_input, user_id=None, direction='en_vi'):
     """
     Celery task to handle async translation via Database lookup or Vertex AI Priority PayGo.
     """
@@ -23,43 +23,48 @@ def translate_en_pure_text_task(self, text_input, user_id=None):
             )
         return result
 
-    # Tầng 1: Tra cứu DB tiếng Anh
-    match = EnExample.objects.filter(english__iexact=cleaned_query).first()
-    if match:
-        result = {
-            'translatedText': match.vietnamese,
-            'source': 'database',
-            'status': 'SUCCESS'
-        }
-        if user_id:
-            ws_notify(
-                user_id=user_id,
-                event_type='translation_complete',
-                title='Dịch thuật hoàn tất',
-                payload={'task_id': self.request.id, **result}
-            )
-        return result
+    # Tầng 1: Tra cứu DB tiếng Anh (Chỉ dịch từ tiếng Anh sang tiếng Việt mới tra cứu DB)
+    if direction == 'en_vi':
+        match = EnExample.objects.filter(english__iexact=cleaned_query).first()
+        if match:
+            result = {
+                'translatedText': match.vietnamese,
+                'source': 'database',
+                'status': 'SUCCESS'
+            }
+            if user_id:
+                ws_notify(
+                    user_id=user_id,
+                    event_type='translation_complete',
+                    title='Dịch thuật hoàn tất',
+                    payload={'task_id': self.request.id, **result}
+                )
+            return result
 
-    # Tầng 1.2: Tra cứu DB tiếng Anh (EnWord)
-    from .models import EnWord
-    word_match = EnWord.objects.filter(word__iexact=cleaned_query).first()
-    if word_match:
-        result = {
-            'translatedText': word_match.translation_vi,
-            'source': 'database',
-            'status': 'SUCCESS'
-        }
-        if user_id:
-            ws_notify(
-                user_id=user_id,
-                event_type='translation_complete',
-                title='Dịch thuật hoàn tất',
-                payload={'task_id': self.request.id, **result}
-            )
-        return result
+        # Tầng 1.2: Tra cứu DB tiếng Anh (EnWord)
+        from .models import EnWord
+        word_match = EnWord.objects.filter(word__iexact=cleaned_query).first()
+        if word_match:
+            result = {
+                'translatedText': word_match.translation_vi,
+                'source': 'database',
+                'status': 'SUCCESS'
+            }
+            if user_id:
+                ws_notify(
+                    user_id=user_id,
+                    event_type='translation_complete',
+                    title='Dịch thuật hoàn tất',
+                    payload={'task_id': self.request.id, **result}
+                )
+            return result
 
     # Tầng 2: Gọi LLM (Vertex AI Priority PayGo)
-    system_prompt = "Bạn là chuyên gia dịch thuật Anh-Việt xuất sắc. Hãy dịch văn bản một cách mượt mà và tự nhiên nhất. Chỉ trả về kết quả dịch."
+    if direction == 'vi_en':
+        system_prompt = "Bạn là chuyên gia dịch thuật Việt-Anh xuất sắc. Hãy dịch văn bản một cách mượt mà và tự nhiên nhất. Chỉ trả về kết quả dịch."
+    else:
+        system_prompt = "Bạn là chuyên gia dịch thuật Anh-Việt xuất sắc. Hãy dịch văn bản một cách mượt mà và tự nhiên nhất. Chỉ trả về kết quả dịch."
+    
     try:
         translated_text = None
         try:
@@ -92,7 +97,7 @@ def translate_en_pure_text_task(self, text_input, user_id=None):
                 'status': 'SUCCESS'
             }
             # Lưu cache dài hạn tiếng Anh tách biệt
-            cache.set(f"ai_trans_en:{text_input}", {"status": "success", "result": result_data}, timeout=7 * 24 * 60 * 60)
+            cache.set(f"ai_trans_en:{direction}:{text_input}", {"status": "success", "result": result_data}, timeout=7 * 24 * 60 * 60)
             if user_id:
                 ws_notify(
                     user_id=user_id,
