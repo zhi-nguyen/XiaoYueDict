@@ -115,3 +115,4 @@ core_django/cnen-auth-key.json
 tts_service/cache/
 **/key.json
 /core_django/data
+/scripts

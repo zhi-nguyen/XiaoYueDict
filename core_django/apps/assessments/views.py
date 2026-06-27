@@ -4,9 +4,8 @@ from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
 from .models import AssessmentTask
 from .serializers import AssessmentTaskSerializer
-from .tasks import process_audio_task
-
-
+from .tasks import process_audio_task, process_refund_task
+from rest_framework.permissions import AllowAny
 import subprocess
 import os
 import logging
@@ -230,4 +229,74 @@ class SpellCheckView(APIView):
         result = check_english_text(text)
 
         return Response(result, status=status.HTTP_200_OK)
+
+
+class RefundAssessmentView(APIView):
+    """
+    POST /api/v1/assessments/refund/
+    Allows the client to request a rate limit refund if a task times out (e.g. after 60s).
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        task_id = request.data.get('task_id')
+        if not task_id:
+            return Response(
+                {'error': 'Missing task_id parameter.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            task = AssessmentTask.objects.get(id=task_id)
+        except (AssessmentTask.DoesNotExist, ValueError):
+            return Response(
+                {'error': 'Task not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # IDOR Protection
+        if task.user is not None:
+            if not request.user.is_authenticated or task.user != request.user:
+                return Response(
+                    {'error': 'Permission denied.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        # Check if the task is already completed
+        if task.status == 'COMPLETED':
+            return Response(
+                {'error': 'Cannot refund a completed task.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Preliminary check: check if already refunded or currently processing refund
+        if task.refund_status in ('PENDING', 'SUCCESS'):
+            return Response(
+                {'status': 'already_failed', 'message': 'Task already timed out and refunded.'},
+                status=status.HTTP_200_OK,
+            )
+
+        # Process Refund
+        guest_id = request.data.get('guest_id') or request.headers.get('X-Guest-ID')
+        if task.user:
+            rate_limit_user_id = f"user:{task.user.id}"
+        else:
+            identifier = guest_id if guest_id else request.META.get('REMOTE_ADDR', 'anonymous')
+            rate_limit_user_id = f"guest:{identifier}"
+
+        file_size = task.audio_file.size if task.audio_file else 0
+
+        # Trigger refund asynchronously via Celery
+        process_refund_task.delay(str(task.id), rate_limit_user_id)
+        logger.info(f"Triggered asynchronous refund task for task {task_id}.")
+
+        return Response(
+            {
+                'status': 'refunded',
+                'task_id': str(task.id),
+                'refunded_bytes': file_size,
+                'message': 'Refund request accepted and is processing asynchronously.',
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 

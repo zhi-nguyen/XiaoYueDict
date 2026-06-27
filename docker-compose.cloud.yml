@@ -268,6 +268,20 @@ services:
     networks:
       - xiaoyue-network
 
+  # ── Image Service ──
+  image-service:
+    build:
+      context: ./image_service
+    volumes:
+      - ./image_service/cache:/app/cache
+      - /opt/xiaoyue/secure/key.json:/app/key.json:ro
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/key.json
+      - GS_BUCKET_NAME=${GS_BUCKET_NAME:-cnen-bucket}
+    restart: unless-stopped
+    networks:
+      - xiaoyue-network
+
 # ── Volumes ──
 volumes:
   postgres_data:
