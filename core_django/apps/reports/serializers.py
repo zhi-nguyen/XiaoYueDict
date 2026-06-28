@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import ContentReport
+from .models import ContentReport, FeatureReport, SupportRequest, TicketComment
 
 # Import các model từ hệ thống để validate động
 from apps.dictionary_zh.models import ZhWord, ZhExample
@@ -82,3 +82,101 @@ class ContentReportCreateSerializer(serializers.ModelSerializer):
             )
 
         return data
+
+
+class FeatureReportCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FeatureReport
+        fields = ['id', 'title', 'description', 'feature_area', 'guest_id']
+        extra_kwargs = {
+            'guest_id': {'required': False, 'allow_blank': True},
+        }
+
+    def validate_title(self, value: str) -> str:
+        if not value.strip():
+            raise serializers.ValidationError("Tiêu đề không được để trống.")
+        return value.strip()
+
+    def validate_description(self, value: str) -> str:
+        if not value.strip():
+            raise serializers.ValidationError("Mô tả chi tiết không được để trống.")
+        return value.strip()
+
+
+class FeatureReportListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FeatureReport
+        fields = ['id', 'title', 'feature_area', 'status', 'created_at']
+
+
+class SupportRequestCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SupportRequest
+        fields = [
+            'id', 'title', 'description', 'category',
+            'guest_id', 'guest_name', 'guest_email',
+        ]
+        extra_kwargs = {
+            'guest_id': {'required': False, 'allow_blank': True},
+            'guest_name': {'required': False, 'allow_blank': True},
+            'guest_email': {'required': False, 'allow_blank': True},
+        }
+
+    def validate_title(self, value: str) -> str:
+        if not value.strip():
+            raise serializers.ValidationError("Tiêu đề không được để trống.")
+        return value.strip()
+
+    def validate_description(self, value: str) -> str:
+        if not value.strip():
+            raise serializers.ValidationError("Mô tả chi tiết không được để trống.")
+        return value.strip()
+
+    def validate(self, data: dict) -> dict:
+        request = self.context.get('request')
+        user = request.user if request else None
+
+        # Guest phải cung cấp email hợp lệ để nhận phản hồi
+        if not user or not user.is_authenticated:
+            guest_email = data.get('guest_email', '').strip()
+            if not guest_email:
+                raise serializers.ValidationError({
+                    "guest_email": "Vui lòng cung cấp email liên hệ để nhận phản hồi từ hệ thống."
+                })
+
+        return data
+
+
+class SupportRequestListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SupportRequest
+        fields = ['id', 'title', 'category', 'priority', 'status', 'created_at']
+
+
+class TicketCommentSerializer(serializers.ModelSerializer):
+    author_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TicketComment
+        fields = ['id', 'author_name', 'comment_text', 'created_at']
+
+    def get_author_name(self, obj: TicketComment) -> str:
+        if obj.author:
+            return obj.author.username
+        return "Hệ thống"
+
+
+class SupportRequestDetailSerializer(serializers.ModelSerializer):
+    comments = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SupportRequest
+        fields = [
+            'id', 'title', 'description', 'category', 'priority',
+            'status', 'created_at', 'updated_at', 'comments',
+        ]
+
+    def get_comments(self, obj: SupportRequest) -> list[dict]:
+        # Chỉ trả về comment công khai (is_internal=False)
+        public_comments = obj.comments.filter(is_internal=False)
+        return TicketCommentSerializer(public_comments, many=True).data
