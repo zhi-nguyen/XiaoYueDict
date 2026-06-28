@@ -116,3 +116,4 @@ tts_service/cache/
 **/key.json
 /core_django/data
 /scripts
+core_django/celerybeat-schedule

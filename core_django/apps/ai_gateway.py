@@ -1,5 +1,6 @@
 import re
 import logging
+import hashlib
 from rest_framework.response import Response
 from rest_framework import status
 from django.core.cache import cache
@@ -67,8 +68,7 @@ class AIFallbackGateway:
 
         if query and not db_hit:
             # Tra cứu bộ nhớ đệm AI (Redis Cache)
-            direction = "zh_vi" if mode == 'zh' else "en_vi"
-            ai_cache_key = f"{cache_key_prefix}:{direction}:{query}"
+            ai_cache_key = f"{cache_key_prefix}:{query}"
             cached_data = cache.get(ai_cache_key)
 
             if cached_data:
@@ -198,7 +198,8 @@ class AIFallbackGateway:
                             'status': 'SUCCESS'
                         }, status=status.HTTP_200_OK)
 
-        ai_cache_key = f"{cache_key_prefix}:{direction}:{text_input}"
+        hashed_text = hashlib.md5(text_input.encode('utf-8')).hexdigest()
+        ai_cache_key = f"{cache_key_prefix}:{direction}:{hashed_text}"
         cached_data = cache.get(ai_cache_key)
 
         if cached_data:

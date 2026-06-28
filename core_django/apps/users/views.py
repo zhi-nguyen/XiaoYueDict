@@ -234,7 +234,8 @@ class FirebaseLoginView(APIView):
             email = decoded_token.get('email')
             name = decoded_token.get('name', '') or ''
         except Exception as e:
-            return Response({"detail": f"Token không hợp lệ: {str(e)}"}, status=401)
+            logger.error(f"Firebase token verification failed: {e}")
+            return Response({"detail": "Token không hợp lệ hoặc đã hết hạn."}, status=401)
 
         User = get_user_model()
         user = None

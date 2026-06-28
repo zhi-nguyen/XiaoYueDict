@@ -12,7 +12,18 @@ import logging
 from apps.subscriptions.middleware import refund_volume_limit
 from .utils import is_service_available
 
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
+
 logger = logging.getLogger(__name__)
+
+
+class SubmitAssessmentAnonThrottle(AnonRateThrottle):
+    rate = '5/minute'
+
+
+class SubmitAssessmentUserThrottle(UserRateThrottle):
+    rate = '20/minute'
+
 
 class SubmitAssessmentView(APIView):
     """
@@ -21,6 +32,7 @@ class SubmitAssessmentView(APIView):
     Saves audio to disk, enqueues a Celery task, returns task_id immediately.
     """
     parser_classes = (MultiPartParser, FormParser)
+    throttle_classes = (SubmitAssessmentAnonThrottle, SubmitAssessmentUserThrottle)
 
     def post(self, request, *args, **kwargs):
         # 0. Kiểm tra bảo trì
@@ -186,6 +198,11 @@ class SubmitAssessmentView(APIView):
         processing_time_per_task = 7  # seconds
         estimated_wait_seconds = math.ceil(queue_position / concurrency) * processing_time_per_task
 
+        # Store guest_id mapping in Redis for guest tasks (IDOR protection)
+        if not request.user.is_authenticated and guest_id:
+            from django.core.cache import cache
+            cache.set(f"task_guest:{task.id}", str(guest_id), timeout=86400)  # 24 hours
+
         return Response(
             {
                 'task_id': str(task.id),
@@ -219,6 +236,17 @@ class AssessmentStatusView(APIView):
                     {'error': 'Permission denied. This task belongs to another user.'},
                     status=status.HTTP_403_FORBIDDEN,
                 )
+        else:
+            # Guest task protection
+            from django.core.cache import cache
+            cached_guest_id = cache.get(f"task_guest:{task.id}")
+            if cached_guest_id:
+                request_guest_id = request.data.get('guest_id') or request.query_params.get('guest_id') or request.headers.get('X-Guest-ID')
+                if request_guest_id != cached_guest_id:
+                    return Response(
+                        {'error': 'Permission denied. This task belongs to another guest.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
         serializer = AssessmentTaskSerializer(task)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -286,6 +314,17 @@ class RefundAssessmentView(APIView):
                     {'error': 'Permission denied.'},
                     status=status.HTTP_403_FORBIDDEN,
                 )
+        else:
+            # Guest task protection
+            from django.core.cache import cache
+            cached_guest_id = cache.get(f"task_guest:{task.id}")
+            if cached_guest_id:
+                request_guest_id = request.data.get('guest_id') or request.query_params.get('guest_id') or request.headers.get('X-Guest-ID')
+                if request_guest_id != cached_guest_id:
+                    return Response(
+                        {'error': 'Permission denied.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
         # Check if the task is already completed
         if task.status == 'COMPLETED':

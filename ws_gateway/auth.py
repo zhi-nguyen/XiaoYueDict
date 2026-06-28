@@ -13,6 +13,12 @@ import jwt
 logger = logging.getLogger(__name__)
 
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "replace-this-in-production")
+if JWT_SECRET_KEY == "replace-this-in-production":
+    # Raise error if not explicitly in development mode
+    is_dev = os.environ.get("ENV", "").lower() in ("dev", "development") or os.environ.get("DEBUG", "False").lower() in ("true", "1", "t")
+    if not is_dev:
+        raise ValueError("JWT_SECRET_KEY must be set to a secure value in production!")
+
 JWT_ALGORITHM = "HS256"
 
 
