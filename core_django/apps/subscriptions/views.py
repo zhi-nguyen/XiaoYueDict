@@ -97,9 +97,12 @@ class MySubscriptionView(generics.RetrieveAPIView):
             sub.check_validity()
         return sub
 
+from apps.dictionary_zh.views import StandardResultsSetPagination
+
 class SubscriptionHistoryListView(generics.ListAPIView):
     serializer_class = SubscriptionHistorySerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
         return SubscriptionHistory.objects.filter(user=self.request.user).order_by('-changed_at')

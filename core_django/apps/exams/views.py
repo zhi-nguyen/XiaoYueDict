@@ -65,12 +65,16 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
         cache.set(cache_key, data, timeout=24 * 60 * 60)  # 24 hours
         return Response(data)
 
-    @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser])
+    @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser], permission_classes=[permissions.IsAdminUser])
     def upload_full_exam(self, request):
         """
         Upload an entire exam including JSON data, audio, and images.
+        Processes asynchronously in background via Celery.
         """
-        from .utils import import_full_exam_data
+        import uuid
+        import os
+        from django.core.files.storage import default_storage
+        from .tasks import import_full_exam_task
 
         exam_json_file = request.FILES.get('exam_json')
         audio_file = request.FILES.get('audio_file')
@@ -80,21 +84,67 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
         if not exam_json_file:
             return Response({'error': 'Missing exam_json file'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # 1. Create a unique temp directory inside media root
+        import_id = str(uuid.uuid4())
+        temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp_exam_imports', import_id)
+        os.makedirs(os.path.join(temp_dir, 'images'), exist_ok=True)
+
         try:
-            result = import_full_exam_data(
-                exam_json_file=exam_json_file,
-                audio_file=audio_file,
-                image_mapping_file=image_mapping_file,
-                images=images
+            # 2. Save JSON file
+            json_name = exam_json_file.name
+            json_path = os.path.join(temp_dir, json_name)
+            with open(json_path, 'wb') as f:
+                for chunk in exam_json_file.chunks():
+                    f.write(chunk)
+
+            # 3. Save Audio file (if provided)
+            audio_name = None
+            if audio_file:
+                audio_name = audio_file.name
+                audio_path = os.path.join(temp_dir, audio_name)
+                with open(audio_path, 'wb') as f:
+                    for chunk in audio_file.chunks():
+                        f.write(chunk)
+
+            # 4. Save Image Mapping file (if provided)
+            mapping_name = None
+            if image_mapping_file:
+                mapping_name = image_mapping_file.name
+                mapping_path = os.path.join(temp_dir, mapping_name)
+                with open(mapping_path, 'wb') as f:
+                    for chunk in image_mapping_file.chunks():
+                        f.write(chunk)
+
+            # 5. Save images (if provided)
+            images_names = []
+            for img in images:
+                img_name = img.name
+                images_names.append(img_name)
+                img_path = os.path.join(temp_dir, 'images', img_name)
+                with open(img_path, 'wb') as f:
+                    for chunk in img.chunks():
+                        f.write(chunk)
+
+            # 6. Trigger background task
+            task = import_full_exam_task.delay(
+                temp_dir=temp_dir,
+                exam_json_name=json_name,
+                audio_name=audio_name,
+                image_mapping_name=mapping_name,
+                images_names=images_names
             )
+
             return Response({
-                'message': 'Exam uploaded successfully. Media processing started in the background.',
-                'exam_id': result['exam_id'],
-                'audio_url': result['audio_url'],
-                'images_uploaded': result['images_uploaded']
-            })
-        except ValueError as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+                'message': 'Đã nhận yêu cầu tải lên đề thi. Tiến trình nhập dữ liệu đang chạy ngầm.',
+                'task_id': task.id
+            }, status=status.HTTP_202_ACCEPTED)
+
         except Exception as e:
-            logger.error("Failed to upload full exam via API", exc_info=True)
-            return Response({'error': f'Database error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            # Cleanup temp directory if saving files failed
+            import shutil
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            import logging
+            logging.getLogger(__name__).error(f"Failed to initiate background exam import: {e}", exc_info=True)
+            return Response({'error': f'Lỗi hệ thống: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+

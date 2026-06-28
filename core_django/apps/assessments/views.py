@@ -134,40 +134,7 @@ class SubmitAssessmentView(APIView):
                 identifier = guest_id if guest_id else request.META.get('REMOTE_ADDR', 'anonymous')
                 rate_limit_user_id = f"guest:{identifier}"
 
-        # Đo thời lượng bằng ffprobe có timeout
-        duration = 0
-        has_error = False
-        error_msg = ''
-        try:
-            cmd = [
-                'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-                '-of', 'default=noprint_wrappers=1:nokey=1', task.audio_file.path
-            ]
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
-            if result.returncode == 0:
-                duration = float(result.stdout.strip())
-                if duration > duration_limit:
-                    has_error = True
-                    error_msg = f'Thời lượng tệp ghi âm vượt quá giới hạn tối đa cho phép cho gói của bạn ({duration_limit} giây).'
-            else:
-                has_error = True
-                error_msg = 'Tệp âm thanh không hợp lệ hoặc không thể phân tích.'
-        except subprocess.TimeoutExpired:
-            has_error = True
-            error_msg = 'Quá thời gian phân tích thời lượng tệp ghi âm (Metadata Timeout).'
-        except Exception as e:
-            has_error = True
-            error_msg = f'Lỗi phân tích cú pháp tệp tin: {str(e)}'
-
-        if has_error:
-            try:
-                if task.audio_file and os.path.exists(task.audio_file.path):
-                    task.audio_file.delete()
-                task.delete()
-            finally:
-                refund_volume_limit(rate_limit_user_id, audio_file.size)
-            return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
-
+        # Trigger Celery task asynchronously. Duration limits are validated on the worker node.
         process_audio_task.apply_async(
             args=[
                 str(task.id),
@@ -178,6 +145,7 @@ class SubmitAssessmentView(APIView):
             ],
             kwargs={
                 'rate_limit_user_id': rate_limit_user_id,
+                'duration_limit': duration_limit,
             },
             queue=target_queue
         )

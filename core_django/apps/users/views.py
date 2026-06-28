@@ -298,15 +298,41 @@ class FirebaseLoginView(APIView):
         if picture_url and not user.avatar:
             import requests
             from django.core.files.base import ContentFile
+            from urllib.parse import urlparse
+            import socket
             try:
-                avatar_response = requests.get(picture_url, timeout=10)
-                if avatar_response.status_code == 200:
-                    filename = f"avatar_{uid}.jpg"
-                    user.avatar.save(filename, ContentFile(avatar_response.content), save=True)
+                parsed_url = urlparse(picture_url)
+                allowed_domains = ['googleusercontent.com', 'firebaseapp.com', 'secure.gravatar.com', 'google.com']
+                is_valid_domain = any(parsed_url.netloc.endswith(domain) for domain in allowed_domains)
+                
+                # Check resolved IP address to prevent SSRF against loopback or private ranges
+                is_private_ip = False
+                if parsed_url.hostname:
+                    try:
+                        ip = socket.gethostbyname(parsed_url.hostname)
+                        octets = [int(o) for o in ip.split('.')]
+                        if (octets[0] == 127 or
+                            octets[0] == 10 or
+                            (octets[0] == 172 and 16 <= octets[1] <= 31) or
+                            (octets[0] == 192 and octets[1] == 168) or
+                            ip == '255.255.255.255'):
+                            is_private_ip = True
+                    except Exception:
+                        is_private_ip = True  # Block if hostname resolution fails
+                
+                if is_valid_domain and parsed_url.scheme in ('http', 'https') and not is_private_ip:
+                    avatar_response = requests.get(picture_url, timeout=10)
+                    if avatar_response.status_code == 200:
+                        filename = f"avatar_{uid}.jpg"
+                        user.avatar.save(filename, ContentFile(avatar_response.content), save=True)
+                else:
+                    import logging
+                    logging.getLogger(__name__).warning(f"Blocked untrusted or private profile picture URL (SSRF prevention): {picture_url}")
             except Exception as avatar_err:
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.error(f"Failed to sync Firebase avatar: {avatar_err}")
+
 
         # Generate SimpleJWT tokens
         from rest_framework_simplejwt.tokens import RefreshToken

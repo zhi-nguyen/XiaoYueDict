@@ -90,16 +90,22 @@ class NotebookDetailView(APIView):
 
 # ─── Word Views ─────────────────────────────────────────────────
 
+class WordPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 class WordListCreateView(APIView):
     """
-    GET  /api/v1/notes/notebooks/<id>/words/    → Danh sách từ trong sổ
+    GET  /api/v1/notes/notebooks/<id>/words/    → Danh sách từ trong sổ (phân trang)
     POST /api/v1/notes/notebooks/<id>/words/    → Thêm từ vào sổ
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request, notebook_id):
         notebook = get_object_or_404(Notebook, pk=notebook_id, user=request.user)
-        words = notebook.words.all()
+        words = notebook.words.all().order_by('-created_at')
 
         # Tìm kiếm theo từ vựng hoặc nghĩa
         search = request.query_params.get('search', '').strip()
@@ -109,6 +115,12 @@ class WordListCreateView(APIView):
                 | Q(pinyin__icontains=search)
                 | Q(meaning__icontains=search)
             )
+
+        paginator = WordPagination()
+        page = paginator.paginate_queryset(words, request)
+        if page is not None:
+            serializer = WordSerializer(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
 
         serializer = WordSerializer(words, many=True)
         return Response(serializer.data)

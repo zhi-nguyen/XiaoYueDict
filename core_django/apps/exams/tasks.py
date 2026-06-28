@@ -168,3 +168,55 @@ def process_exam_media_task(exam_id):
                 logger.warning(f"⚠️ Failed to delete local directory {local_dir}: {cleanup_err}")
 
     return f"Exam {exam_id} media processed and uploaded successfully"
+
+
+@shared_task
+def import_full_exam_task(temp_dir, exam_json_name, audio_name=None, image_mapping_name=None, images_names=None):
+    from django.core.files import File
+    from .utils import import_full_exam_data
+    import shutil
+
+    images_names = images_names or []
+    
+    # Construct full paths
+    json_path = os.path.join(temp_dir, exam_json_name)
+    audio_path = os.path.join(temp_dir, audio_name) if audio_name else None
+    image_mapping_path = os.path.join(temp_dir, image_mapping_name) if image_mapping_name else None
+    
+    # Open files and wrap with django File
+    f_json = File(open(json_path, 'rb'), name=exam_json_name)
+    f_audio = File(open(audio_path, 'rb'), name=audio_name) if audio_path else None
+    f_mapping = File(open(image_mapping_path, 'rb'), name=image_mapping_name) if image_mapping_path else None
+    
+    f_images = []
+    for img_name in images_names:
+        img_path = os.path.join(temp_dir, 'images', img_name)
+        if os.path.exists(img_path):
+            f_images.append(File(open(img_path, 'rb'), name=img_name))
+            
+    try:
+        result = import_full_exam_data(
+            exam_json_file=f_json,
+            audio_file=f_audio,
+            image_mapping_file=f_mapping,
+            images=f_images
+        )
+        logger.info(f"Import full exam task finished successfully: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Error running import_full_exam_task: {e}", exc_info=True)
+        raise e
+    finally:
+        # Clean up files
+        f_json.close()
+        if f_audio: f_audio.close()
+        if f_mapping: f_mapping.close()
+        for f_img in f_images:
+            f_img.close()
+            
+        # Remove temp directory
+        try:
+            shutil.rmtree(temp_dir)
+        except Exception as cleanup_err:
+            logger.warning(f"Failed to delete temp dir {temp_dir}: {cleanup_err}")
+
