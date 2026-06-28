@@ -30,28 +30,28 @@ class ZhWordSearchView(generics.ListAPIView):
 
         # Check if fallback is disabled
         fallback_param = request.query_params.get('fallback', 'true').lower() == 'true'
+        is_chinese = bool(re.search(r'[\u4e00-\u9fa5]', query))
+        q_lower = query.lower()
 
         if fallback_param:
-            is_chinese = bool(re.search(r'[\u4e00-\u9fa5]', query))
-
             def db_lookup():
-                queryset = self.filter_queryset(self.get_queryset())
                 exact_example = None
                 query_len = len(query)
 
+                # 1. Check exact examples using language-specific fast checks
                 if 2 <= query_len <= 100:
                     from .models import ZhExample
                     cleaned_query_end = re.sub(r'[。，、！？. , ! ?]+$', '', query)
                     cleaned_for_search = re.sub(r'[。，、！？. , ! ? : ： ; ； ( ) （ ） \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
-                    regex_pattern = r'^' + re.escape(cleaned_query_end) + r'[。，、！？. , ! ?]*$'
                     
-                    # Check Chinese field
-                    match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
-                    if not match and cleaned_for_search:
-                        match = ZhExample.objects.filter(chinese__icontains=cleaned_for_search).first()
-                    
-                    # Check Vietnamese field (Utilizes GIN Trigram index)
-                    if not match and cleaned_for_search:
+                    if is_chinese:
+                        # For Chinese, exact sentence match only
+                        regex_pattern = r'^' + re.escape(cleaned_query_end) + r'[。，、！？. , ! ?]*$'
+                        match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
+                        if not match and cleaned_for_search:
+                            match = ZhExample.objects.filter(chinese__icontains=cleaned_for_search).first()
+                    else:
+                        # For Latin/Vietnamese/English queries
                         match = ZhExample.objects.filter(vietnamese__icontains=cleaned_for_search).first()
                     
                     if match:
@@ -62,14 +62,23 @@ class ZhWordSearchView(generics.ListAPIView):
                             'vietnamese': match.vietnamese
                         }
 
+                # 2. Check if there are matches in ZhWord using very fast B-tree index queries
                 if is_chinese:
                     has_exact_word = ZhWord.objects.filter(Q(word=query) | Q(traditional=query)).exists()
                     has_data = has_exact_word or (exact_example is not None)
                 else:
-                    has_data = queryset.exists() or (exact_example is not None)
+                    # For English/Pinyin, check exact pinyin or translation_vi startswith (fast indexed scan)
+                    has_exact_pinyin = ZhWord.objects.filter(Q(pinyin=q_lower) | Q(toneless_pinyin=q_lower)).exists()
+                    if has_exact_pinyin:
+                        has_data = True
+                    else:
+                        # Fallback to general queryset check but only fetch ID to avoid overhead
+                        queryset = self.filter_queryset(self.get_queryset())
+                        has_data = queryset.only('id').exists() or (exact_example is not None)
 
                 if has_data:
-                    db_shared_container['queryset'] = queryset
+                    if 'queryset' not in db_shared_container:
+                        db_shared_container['queryset'] = self.filter_queryset(self.get_queryset())
                     db_shared_container['exact_example'] = exact_example
                     return True
                 return False
@@ -132,31 +141,26 @@ class ZhWordSearchView(generics.ListAPIView):
             ).order_by('adjusted_rank')
 
         q_lower = cleaned_query.lower()
-        
-        # Tokenize query for FTS Search
-        tokenized_query = " ".join(jieba.cut(cleaned_query))
-        query_obj = SearchQuery(tokenized_query, config='simple')
-        
-        # --- Pre-filtering optimization ---
-        filter_q = Q(word__exact=cleaned_query) | Q(traditional__exact=cleaned_query) | \
-                   Q(toneless_pinyin__iexact=q_lower) | Q(pinyin__iexact=q_lower) | \
-                   Q(word__startswith=cleaned_query) | Q(traditional__startswith=cleaned_query) | \
-                   Q(toneless_pinyin__istartswith=q_lower) | Q(pinyin__istartswith=q_lower)
-        
-        if len(cleaned_query) >= 2:
-            filter_q |= Q(translation_en__iexact=q_lower) | Q(han_viet__iexact=q_lower) | \
-                       Q(translation_vi__icontains=q_lower) | Q(han_viet__icontains=q_lower) | \
-                       Q(translation_en__icontains=q_lower)
+        is_chinese = bool(re.search(r'[\u4e00-\u9fa5]', cleaned_query))
+
+        # --- Pre-filtering optimization based on language ---
+        if is_chinese:
+            # 1. Chinese Query Flow
+            filter_q = Q(word__exact=cleaned_query) | Q(traditional__exact=cleaned_query) | \
+                       Q(word__startswith=cleaned_query) | Q(traditional__startswith=cleaned_query)
             
-            # Find matching word IDs from examples
+            # Tokenize query for FTS Search
+            tokenized_query = " ".join(jieba.cut(cleaned_query))
+            query_obj = SearchQuery(tokenized_query, config='simple')
+            
             example_word_ids = list(
                 ZhExample.objects.filter(
-                    Q(search_vector=query_obj) | Q(vietnamese__icontains=cleaned_query)
+                    search_vector=query_obj
                 ).values_list('word_id', flat=True).distinct()
             )
             if example_word_ids:
                 filter_q |= Q(id__in=example_word_ids)
-                
+
             # Generate substrings of query for fast word_idx match
             substrings = []
             for i in range(len(cleaned_query)):
@@ -168,42 +172,77 @@ class ZhWordSearchView(generics.ListAPIView):
             if substrings:
                 filter_q |= Q(word__in=substrings)
                 
-        queryset = queryset.filter(filter_q)
-        
-        # 0. Subquery to check for example match without causing joins
-        has_example_match = Exists(
-            ZhExample.objects.filter(word_id=OuterRef('pk')).filter(
-                Q(search_vector=query_obj) | Q(vietnamese__icontains=cleaned_query)
+            queryset = queryset.filter(filter_q)
+            has_example_match = Exists(
+                ZhExample.objects.filter(word_id=OuterRef('pk'), search_vector=query_obj)
             )
-        )
-        
-        # 1. Annotate word length and reverse match index
-        queryset = queryset.annotate(
-            word_len=Length('word'),
-            word_idx=StrIndex(Value(cleaned_query), F('word'))
-        )
-        
-        # 2. Comprehensive search logic covering all cases
-        queryset = queryset.annotate(
-            match_level=Case(
-                When(Q(word__exact=cleaned_query) | Q(traditional__exact=cleaned_query), then=Value(1)),
-                When(Q(toneless_pinyin__iexact=q_lower) | Q(pinyin__iexact=q_lower), then=Value(2)),
-                When(Q(word__startswith=cleaned_query) | Q(traditional__startswith=cleaned_query), then=Value(3)),
-                When(Q(toneless_pinyin__istartswith=q_lower) | Q(pinyin__istartswith=q_lower), then=Value(4)),
-                When(Q(translation_en__iexact=q_lower) | Q(han_viet__iexact=q_lower), then=Value(5)),
-                When(Q(translation_vi__icontains=q_lower) | Q(han_viet__icontains=q_lower) | Q(translation_en__icontains=q_lower), then=Value(6)),
-                When(has_example_match, then=Value(7)),
-                When(word_idx__gt=0, then=Value(8)),
-                default=Value(999999),
-                output_field=IntegerField(),
-            ),
-            adjusted_rank=Case(
-                When(popularity_rank=0, then=Value(999999)),
-                default='popularity_rank',
-                output_field=IntegerField(),
+            
+            # Match levels for Chinese: 1, 3, 7, 8
+            queryset = queryset.annotate(
+                word_len=Length('word'),
+                word_idx=StrIndex(Value(cleaned_query), F('word'))
+            ).annotate(
+                match_level=Case(
+                    When(Q(word__exact=cleaned_query) | Q(traditional__exact=cleaned_query), then=Value(1)),
+                    When(Q(word__startswith=cleaned_query) | Q(traditional__startswith=cleaned_query), then=Value(3)),
+                    When(has_example_match, then=Value(7)),
+                    When(word_idx__gt=0, then=Value(8)),
+                    default=Value(999999),
+                    output_field=IntegerField(),
+                ),
+                adjusted_rank=Case(
+                    When(popularity_rank=0, then=Value(999999)),
+                    default='popularity_rank',
+                    output_field=IntegerField(),
+                )
             )
-        )
-        
+        else:
+            # 2. Latin (Vietnamese, English, Pinyin, Hán Việt) Query Flow
+            filter_q = Q(toneless_pinyin__iexact=q_lower) | Q(pinyin__iexact=q_lower) | \
+                       Q(toneless_pinyin__istartswith=q_lower) | Q(pinyin__istartswith=q_lower)
+            
+            if len(cleaned_query) >= 2:
+                filter_q |= Q(translation_en__iexact=q_lower) | Q(han_viet__iexact=q_lower) | \
+                           Q(translation_vi__icontains=q_lower) | Q(han_viet__icontains=q_lower) | \
+                           Q(translation_en__icontains=q_lower)
+                
+                # Check vietnamese matching in ZhExample
+                example_word_ids = list(
+                    ZhExample.objects.filter(
+                        vietnamese__icontains=cleaned_query
+                    ).values_list('word_id', flat=True).distinct()
+                )
+                if example_word_ids:
+                    filter_q |= Q(id__in=example_word_ids)
+
+            queryset = queryset.filter(filter_q)
+            
+            has_example_match = Exists(
+                ZhExample.objects.filter(word_id=OuterRef('pk'), vietnamese__icontains=cleaned_query)
+            )
+            
+            # Match levels for Latin: 2, 4, 5, 6, 7, 8
+            queryset = queryset.annotate(
+                word_len=Length('word'),
+                word_idx=StrIndex(Value(cleaned_query), F('word'))
+            ).annotate(
+                match_level=Case(
+                    When(Q(toneless_pinyin__iexact=q_lower) | Q(pinyin__iexact=q_lower), then=Value(2)),
+                    When(Q(toneless_pinyin__istartswith=q_lower) | Q(pinyin__istartswith=q_lower), then=Value(4)),
+                    When(Q(translation_en__iexact=q_lower) | Q(han_viet__iexact=q_lower), then=Value(5)),
+                    When(Q(translation_vi__icontains=q_lower) | Q(han_viet__icontains=q_lower) | Q(translation_en__icontains=q_lower), then=Value(6)),
+                    When(has_example_match, then=Value(7)),
+                    When(word_idx__gt=0, then=Value(8)),
+                    default=Value(999999),
+                    output_field=IntegerField(),
+                ),
+                adjusted_rank=Case(
+                    When(popularity_rank=0, then=Value(999999)),
+                    default='popularity_rank',
+                    output_field=IntegerField(),
+                )
+            )
+
         # 3. Conditional sorting length exclusively for Match Level 8
         queryset = queryset.annotate(
             reverse_sort_len=Case(
@@ -213,7 +252,7 @@ class ZhWordSearchView(generics.ListAPIView):
             )
         )
 
-        # 4. Filter and Distinct
+        # 4. Filter match levels
         if len(cleaned_query) >= 2:
             queryset = queryset.filter(match_level__lte=8)
         else:
