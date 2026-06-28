@@ -40,8 +40,33 @@ class SubmitAssessmentView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Chặn cứng tệp tin > 2MB
-        if audio_file.size > 2 * 1024 * 1024:
+        # 1. Xác định phân cấp tài khoản người dùng
+        if request.user and request.user.is_authenticated:
+            user_tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
+        else:
+            user_tier = 'Guest'
+
+        # Định nghĩa các hạn mức tối đa cho từng gói
+        tier_duration_limits = {
+            'Guest': 15,
+            'Free': 30,
+            'Plus': 60,
+            'Pro': 120,
+            'Premium': 120
+        }
+        tier_size_limits = {
+            'Guest': 250 * 1024,      # 250 KB
+            'Free': 500 * 1024,       # 500 KB
+            'Plus': 1024 * 1024,      # 1 MB
+            'Pro': 2 * 1024 * 1024,   # 2 MB
+            'Premium': 2 * 1024 * 1024 # 2 MB
+        }
+
+        duration_limit = tier_duration_limits.get(user_tier, 30)
+        size_limit = tier_size_limits.get(user_tier, 500 * 1024)
+
+        # 2. Kiểm tra giới hạn dung lượng tệp tin (Dynamic Payload check)
+        if audio_file.size > size_limit:
             guest_id = request.data.get('guest_id')
             rate_limit_user_id = getattr(request, 'rate_limit_user_id', None)
             if not rate_limit_user_id:
@@ -52,8 +77,9 @@ class SubmitAssessmentView(APIView):
                     rate_limit_user_id = f"guest:{identifier}"
             
             refund_volume_limit(rate_limit_user_id, audio_file.size)
+            limit_display = f"{size_limit / (1024 * 1024):.2f}MB" if size_limit >= 1024 * 1024 else f"{size_limit / 1024:.0f}KB"
             return Response(
-                {'error': 'Dung lượng tệp ghi âm vượt quá giới hạn tối đa cho phép (2MB).'},
+                {'error': f'Dung lượng tệp ghi âm vượt quá giới hạn tối đa cho phép cho gói của bạn ({limit_display}).'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -67,13 +93,11 @@ class SubmitAssessmentView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Determine the subscription tier and route to the correct physical queue
-        if request.user and request.user.is_authenticated:
-            tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
-            if tier in ('Plus', 'Premium', 'Pro'):
-                target_queue = 'queue_paid'
-            else:
-                target_queue = 'queue_free'
+        # Ánh xạ phân cấp sang hàng đợi tương ứng trên Celery
+        if user_tier in ('Plus', 'Premium', 'Pro'):
+            target_queue = 'queue_paid'
+        elif user_tier == 'Free':
+            target_queue = 'queue_free'
         else:
             target_queue = 'queue_guest'
 
@@ -110,9 +134,9 @@ class SubmitAssessmentView(APIView):
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
             if result.returncode == 0:
                 duration = float(result.stdout.strip())
-                if duration > 45:
+                if duration > duration_limit:
                     has_error = True
-                    error_msg = 'Thời lượng tệp ghi âm vượt quá giới hạn tối đa cho phép (45 giây).'
+                    error_msg = f'Thời lượng tệp ghi âm vượt quá giới hạn tối đa cho phép cho gói của bạn ({duration_limit} giây).'
             else:
                 has_error = True
                 error_msg = 'Tệp âm thanh không hợp lệ hoặc không thể phân tích.'
@@ -145,6 +169,7 @@ class SubmitAssessmentView(APIView):
             },
             queue=target_queue
         )
+
 
         # Return initial queue position relative to its specific physical queue
         pending_ahead = AssessmentTask.objects.filter(

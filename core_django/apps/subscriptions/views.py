@@ -3,9 +3,88 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .models import UserSubscription, SubscriptionHistory
-from .serializers import UserSubscriptionSerializer, SubscriptionHistorySerializer
+from .models import UserSubscription, SubscriptionHistory, SubscriptionPlan
+from .serializers import (
+    UserSubscriptionSerializer, 
+    SubscriptionHistorySerializer, 
+    SubscriptionPlanSerializer,
+    SubscriptionRegisterSerializer
+)
+from .services import MockPaymentService, SubscriptionManager
 from core_project.ws_utils import get_redis_client
+
+class SubscriptionPlanListView(generics.ListAPIView):
+    serializer_class = SubscriptionPlanSerializer
+    permission_classes = [AllowAny]
+    queryset = SubscriptionPlan.objects.all().order_by('price')
+
+class SubscriptionRegisterView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = SubscriptionRegisterSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        target_tier = serializer.validated_data['tier']
+        user = request.user
+        
+        payment_service = MockPaymentService()
+        manager = SubscriptionManager(payment_service)
+
+        try:
+            tiers = ['Free', 'Plus', 'Pro', 'Premium']
+            sub = getattr(user, 'subscription', None)
+            if not sub:
+                sub = UserSubscription.objects.create(user=user, tier='Free')
+
+            current_idx = tiers.index(sub.tier)
+            target_idx = tiers.index(target_tier)
+
+            if target_idx == current_idx:
+                return Response(
+                    {'error': f"Bạn đang sử dụng gói {target_tier} rồi."}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            elif target_idx > current_idx:
+                result = manager.upgrade_tier(user, target_tier)
+            else:
+                result = manager.request_downgrade(user, target_tier)
+            
+            sub_serializer = UserSubscriptionSerializer(user.subscription)
+            return Response({
+                'status': result['status'],
+                'message': f"Yêu cầu xử lý thành công.",
+                'subscription': sub_serializer.data
+            }, status=status.HTTP_200_OK)
+
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except RuntimeError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'error': 'Có lỗi hệ thống xảy ra. Vui lòng liên hệ hỗ trợ.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class CancelDowngradeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        payment_service = MockPaymentService()
+        manager = SubscriptionManager(payment_service)
+
+        try:
+            result = manager.cancel_downgrade(user)
+            sub_serializer = UserSubscriptionSerializer(user.subscription)
+            return Response({
+                'status': result['status'],
+                'message': "Đã hủy yêu cầu hạ cấp thành công.",
+                'subscription': sub_serializer.data
+            }, status=status.HTTP_200_OK)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'error': 'Có lỗi hệ thống xảy ra.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class MySubscriptionView(generics.RetrieveAPIView):
     serializer_class = UserSubscriptionSerializer

@@ -150,6 +150,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.notes.tasks.purge_old_pdf_exports_task',
         'schedule': crontab(minute=0),
     },
+    'process-expired-subscriptions-nightly': {
+        'task': 'apps.subscriptions.tasks.process_expired_subscriptions',
+        'schedule': crontab(hour=0, minute=30),
+    },
 }
 
 # Cache Configuration using Redis

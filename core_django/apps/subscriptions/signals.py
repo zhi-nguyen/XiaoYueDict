@@ -18,7 +18,7 @@ def log_subscription_change(sender, instance, **kwargs):
             old_instance = UserSubscription.objects.get(pk=instance.pk)
             if old_instance.tier != instance.tier:
                 action = 'UPGRADE'
-                tiers = ['Free', 'Plus', 'Premium', 'Pro']
+                tiers = ['Free', 'Plus', 'Pro', 'Premium']
                 try:
                     old_idx = tiers.index(old_instance.tier)
                     new_idx = tiers.index(instance.tier)
@@ -35,6 +35,24 @@ def log_subscription_change(sender, instance, **kwargs):
                     action=action,
                     note=f"Thay đổi từ {old_instance.tier} sang {instance.tier}"
                 )
+            elif old_instance.pending_downgrade_tier != instance.pending_downgrade_tier:
+                if instance.pending_downgrade_tier:
+                    action = 'DOWNGRADE' if instance.pending_downgrade_tier != 'Free' else 'CANCEL'
+                    note = f"Đã lên lịch hạ cấp từ {instance.tier} xuống {instance.pending_downgrade_tier} vào cuối kỳ."
+                    SubscriptionHistory.objects.create(
+                        user=instance.user,
+                        tier=instance.pending_downgrade_tier,
+                        action=action,
+                        note=note
+                    )
+                else:
+                    # Hủy yêu cầu hạ cấp
+                    SubscriptionHistory.objects.create(
+                        user=instance.user,
+                        tier=instance.tier,
+                        action='RENEW',
+                        note=f"Đã hủy yêu cầu hạ cấp xuống {old_instance.pending_downgrade_tier}. Tiếp tục gia hạn gói {instance.tier}."
+                    )
             elif old_instance.end_date != instance.end_date and instance.end_date:
                 SubscriptionHistory.objects.create(
                     user=instance.user,

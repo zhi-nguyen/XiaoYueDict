@@ -9,8 +9,8 @@ class SubscriptionPlan(models.Model):
     TIER_CHOICES = [
         ('Free', 'Free'),
         ('Plus', 'Plus'),
-        ('Premium', 'Premium'),
         ('Pro', 'Pro'),
+        ('Premium', 'Premium'),
     ]
     tier = models.CharField(max_length=20, choices=TIER_CHOICES, unique=True)
     price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Giá gốc của gói")
@@ -38,8 +38,8 @@ class UserSubscription(models.Model):
     TIER_CHOICES = [
         ('Free', 'Free'),
         ('Plus', 'Plus'),
-        ('Premium', 'Premium'),
         ('Pro', 'Pro'),
+        ('Premium', 'Premium'),
     ]
     
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='subscription')
@@ -49,24 +49,58 @@ class UserSubscription(models.Model):
     is_active = models.BooleanField(default=True)
     price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="Giá gốc lưu tại thời điểm thanh toán")
     vat = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'), help_text="Tỷ lệ thuế VAT (%) lưu tại thời điểm thanh toán")
+    pending_downgrade_tier = models.CharField(
+        max_length=20,
+        choices=TIER_CHOICES,
+        null=True,
+        blank=True,
+        help_text="Gói sẽ chuyển xuống khi hết hạn end_date"
+    )
 
     def __str__(self):
         return f"{self.user.username} - {self.tier}"
 
     def check_validity(self):
-        if self.tier != 'Free' and self.end_date and self.end_date < timezone.now():
+        if self.tier != 'Free' and self.tier != 'Premium' and self.end_date and self.end_date < timezone.now():
             from django.db import transaction
             with transaction.atomic():
                 # Thực hiện khóa hàng PostgreSQL bằng QuerySet thông qua select_for_update()
                 locked_sub = UserSubscription.objects.select_for_update().get(pk=self.pk)
-                if locked_sub.tier != 'Free' and locked_sub.end_date and locked_sub.end_date < timezone.now():
-                    locked_sub.tier = 'Free'
-                    locked_sub.is_active = False
+                if locked_sub.tier != 'Free' and locked_sub.tier != 'Premium' and locked_sub.end_date and locked_sub.end_date < timezone.now():
+                    if locked_sub.pending_downgrade_tier:
+                        new_tier = locked_sub.pending_downgrade_tier
+                        locked_sub.pending_downgrade_tier = None
+                        if new_tier == 'Free':
+                            locked_sub.tier = 'Free'
+                            locked_sub.is_active = False
+                            locked_sub.end_date = None
+                        else:
+                            # Mock payment success for auto-renew to the scheduled tier
+                            locked_sub.tier = new_tier
+                            locked_sub.is_active = True
+                            # Set price & vat based on the new plan
+                            try:
+                                plan = SubscriptionPlan.objects.get(tier=new_tier)
+                                locked_sub.price = plan.price
+                                locked_sub.vat = plan.vat
+                            except SubscriptionPlan.DoesNotExist:
+                                pass
+                            locked_sub.end_date = locked_sub.end_date + timezone.timedelta(days=30)
+                    else:
+                        locked_sub.tier = 'Free'
+                        locked_sub.is_active = False
+                        locked_sub.end_date = None
+
                     locked_sub.save()
+                    
                     # Đồng bộ hóa lại trạng thái instance hiện tại
-                    self.tier = 'Free'
-                    self.is_active = False
-                    return False
+                    self.tier = locked_sub.tier
+                    self.is_active = locked_sub.is_active
+                    self.end_date = locked_sub.end_date
+                    self.pending_downgrade_tier = locked_sub.pending_downgrade_tier
+                    self.price = locked_sub.price
+                    self.vat = locked_sub.vat
+                    return self.is_active
         return True
 
     @property

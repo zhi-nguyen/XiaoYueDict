@@ -9,8 +9,8 @@ class SubscriptionPlanAdmin(admin.ModelAdmin):
 
 @admin.register(UserSubscription)
 class UserSubscriptionAdmin(admin.ModelAdmin):
-    list_display = ('user', 'tier', 'price', 'vat', 'total_price_display', 'start_date', 'end_date', 'is_active')
-    list_filter = ('tier', 'is_active')
+    list_display = ('user', 'tier', 'pending_downgrade_tier', 'price', 'vat', 'total_price_display', 'start_date', 'end_date', 'is_active')
+    list_filter = ('tier', 'is_active', 'pending_downgrade_tier')
     search_fields = ('user__username', 'user__email')
     readonly_fields = ('total_price_display',)
 
