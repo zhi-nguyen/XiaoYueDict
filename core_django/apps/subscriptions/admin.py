@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import UserSubscription, SubscriptionHistory, VolumeLimitConfig, SubscriptionPlan
+from .models import UserSubscription, SubscriptionHistory, VolumeLimitConfig, SubscriptionPlan, PaymentOrder
 
 @admin.register(SubscriptionPlan)
 class SubscriptionPlanAdmin(admin.ModelAdmin):
@@ -30,3 +30,9 @@ class VolumeLimitConfigAdmin(admin.ModelAdmin):
     list_filter = ('tier',)
     search_fields = ('tier',)
 
+@admin.register(PaymentOrder)
+class PaymentOrderAdmin(admin.ModelAdmin):
+    list_display = ('order_code', 'user', 'target_tier', 'amount', 'status', 'created_at', 'expires_at', 'paid_at')
+    list_filter = ('status', 'target_tier')
+    search_fields = ('order_code', 'user__username', 'user__email', 'sepay_transaction_id')
+    readonly_fields = ('id', 'order_code', 'sepay_transaction_id', 'bank_reference', 'created_at', 'paid_at')

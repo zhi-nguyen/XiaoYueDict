@@ -5,7 +5,9 @@ from .views import (
     SubscriptionUsageView,
     SubscriptionPlanListView,
     SubscriptionRegisterView,
-    CancelDowngradeView
+    CancelDowngradeView,
+    SePayWebhookView,
+    PaymentStatusView,
 )
 
 urlpatterns = [
@@ -15,5 +17,6 @@ urlpatterns = [
     path('plans/', SubscriptionPlanListView.as_view(), name='subscription-plans'),
     path('register/', SubscriptionRegisterView.as_view(), name='subscription-register'),
     path('cancel-downgrade/', CancelDowngradeView.as_view(), name='cancel-downgrade'),
+    path('sepay-webhook/', SePayWebhookView.as_view(), name='sepay-webhook'),
+    path('payment-status/<uuid:order_id>/', PaymentStatusView.as_view(), name='payment-status'),
 ]
-

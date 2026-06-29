@@ -2,7 +2,7 @@ import logging
 from celery import shared_task
 from django.utils import timezone
 from django.db import transaction
-from .models import UserSubscription, SubscriptionPlan
+from .models import UserSubscription, SubscriptionPlan, PaymentOrder
 
 logger = logging.getLogger(__name__)
 
@@ -61,3 +61,21 @@ def process_expired_subscriptions():
                 count += 1
 
     return f"Processed {count} expired subscriptions."
+
+
+@shared_task
+def expire_pending_payment_orders():
+    """
+    Quét và đánh dấu EXPIRED cho các PaymentOrder PENDING đã quá hạn.
+    Chạy mỗi 5 phút qua Celery Beat.
+    """
+    now = timezone.now()
+    expired_count = PaymentOrder.objects.filter(
+        status='PENDING',
+        expires_at__lt=now,
+    ).update(status='EXPIRED')
+
+    if expired_count > 0:
+        logger.info(f"Expired {expired_count} pending payment orders.")
+
+    return f"Expired {expired_count} pending payment orders."

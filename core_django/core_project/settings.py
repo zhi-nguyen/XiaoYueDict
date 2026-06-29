@@ -171,6 +171,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.subscriptions.tasks.process_expired_subscriptions',
         'schedule': crontab(hour=0, minute=30),
     },
+    'expire-pending-payment-orders': {
+        'task': 'apps.subscriptions.tasks.expire_pending_payment_orders',
+        'schedule': crontab(minute='*/5'),  # Every 5 minutes
+    },
 }
 
 # Cache Configuration using Redis
@@ -218,3 +222,11 @@ XIAOYUE_DATA_ROOT = os.environ.get('XIAOYUE_DATA_ROOT', '/data')
 
 # AI Service Availability Configuration
 AI_SERVICE_AVAILABLE = os.environ.get('AI_SERVICE_AVAILABLE', 'True').lower() == 'true'
+
+# SePay Payment Configuration
+SEPAY_WEBHOOK_SECRET = os.environ.get('SEPAY_WEBHOOK_SECRET', '')
+SEPAY_BANK_CODE = os.environ.get('SEPAY_BANK_CODE', '')
+SEPAY_ACCOUNT_NUMBER = os.environ.get('SEPAY_ACCOUNT_NUMBER', '')
+SEPAY_ACCOUNT_NAME = os.environ.get('SEPAY_ACCOUNT_NAME', '')
+SEPAY_ORDER_PREFIX = os.environ.get('SEPAY_ORDER_PREFIX', 'CNEN')
+SEPAY_PAYMENT_TIMEOUT_MINUTES = int(os.environ.get('SEPAY_PAYMENT_TIMEOUT_MINUTES', '15'))

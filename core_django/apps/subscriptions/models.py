@@ -165,3 +165,55 @@ class VolumeLimitConfig(models.Model):
     def __str__(self):
         return f"Config {self.tier}: {self.mb_per_minute}MB/m, {self.mb_per_hour}MB/h, {self.mb_per_day}MB/d, PDF: {self.pdf_daily_limit} times/day, {self.pdf_word_limit} words/file"
 
+
+class PaymentOrder(models.Model):
+    """Đơn thanh toán — theo dõi lifecycle từ PENDING → PAID/EXPIRED/FAILED."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    STATUS_CHOICES = [
+        ('PENDING', 'Chờ thanh toán'),
+        ('PAID', 'Đã thanh toán'),
+        ('EXPIRED', 'Hết hạn'),
+        ('FAILED', 'Thất bại'),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='payment_orders'
+    )
+    target_tier = models.CharField(max_length=20, help_text="Gói muốn nâng cấp lên")
+    amount = models.DecimalField(
+        max_digits=12, decimal_places=0,
+        help_text="Số tiền cần thanh toán (VNĐ, không lẻ)"
+    )
+    order_code = models.CharField(
+        max_length=50, unique=True, db_index=True,
+        help_text="Mã đơn hàng unique, VD: CNEN-abc12345"
+    )
+    transfer_content = models.CharField(
+        max_length=100,
+        help_text="Nội dung chuyển khoản đầy đủ user cần ghi"
+    )
+    status = models.CharField(
+        max_length=10, choices=STATUS_CHOICES, default='PENDING'
+    )
+
+    # SePay transaction data (populated by webhook)
+    sepay_transaction_id = models.CharField(max_length=100, blank=True, default='')
+    bank_reference = models.CharField(max_length=100, blank=True, default='')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(help_text="Thời điểm đơn hàng hết hạn nếu chưa thanh toán")
+    paid_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Order {self.order_code} - {self.user.username} - {self.status}"
+
+    @property
+    def is_expired(self):
+        return self.status == 'PENDING' and timezone.now() > self.expires_at
+
