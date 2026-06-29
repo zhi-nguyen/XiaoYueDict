@@ -68,9 +68,9 @@ def _resolve_image_prompt(word_id, lang, word):
         "and symbolic components arranged in a clear, step-by-step flow or cohesive assembly."
     )
 
-    if lang == 'zh' and word_obj:
+    if lang == 'zh' and word:
         # Lấy thuộc tính word hoặc key tùy theo cấu trúc object của muội
-        word_str = word_obj.word if hasattr(word_obj, 'word') else str(word_obj)
+        word_str = word.word if hasattr(word, 'word') else str(word)
     
     # Đưa từ tiếng Trung vào làm ngữ cảnh ẩn dụ cho AI hiểu sâu hơn ý nghĩa,
     # nhưng dặn AI KHÔNG được vẽ chữ đó ra.
