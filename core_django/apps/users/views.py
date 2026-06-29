@@ -299,9 +299,11 @@ class FirebaseLoginView(APIView):
             from django.db import transaction
             from .tasks import sync_firebase_avatar_task
 
-            # Gọi bất đồng bộ sau khi commit transaction thành công để tránh lỗi Race Condition
             transaction.on_commit(
-                lambda: sync_firebase_avatar_task.delay(user.id, picture_url)
+                lambda: sync_firebase_avatar_task.apply_async(
+                    args=[str(user.id), picture_url],
+                    queue='queue_core'
+                )
             )
 
 

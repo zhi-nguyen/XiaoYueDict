@@ -107,14 +107,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # CORS & CSRF Configuration — required for Cookie-based Credentials
 CORS_ALLOW_CREDENTIALS = True
 _cors_origins = os.environ.get('CORS_ALLOWED_ORIGINS', '')
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+]
 if _cors_origins:
-    CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_origins.split(',') if o.strip()]
-else:
-    # Fallback to local dev domains for credentials support (cannot use '*' with credentials)
-    CORS_ALLOWED_ORIGINS = [
-        'http://localhost:3000',
-        'http://127.0.0.1:3000',
-    ]
+    CORS_ALLOWED_ORIGINS.extend([o.strip() for o in _cors_origins.split(',') if o.strip()])
 
 # Dynamic CORS regex matching for Vercel preview environments in non-debug mode
 if not DEBUG:
@@ -123,6 +121,11 @@ if not DEBUG:
     ]
 
 CORS_EXPOSE_HEADERS = ['Retry-After']
+
+from corsheaders.defaults import default_headers
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'x-guest-id',
+]
 
 # CSRF Trusted Origins (required for Django 4+ when behind reverse proxy)
 _csrf_origins = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
@@ -156,6 +159,7 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh'
+CELERY_TASK_DEFAULT_QUEUE = 'queue_core'
 
 from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
