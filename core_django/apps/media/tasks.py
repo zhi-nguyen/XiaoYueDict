@@ -54,11 +54,37 @@ def _resolve_image_prompt(word_id, lang, word):
         caption = f"the concept of '{word.word}'"
 
     # Xây dựng prompt hoàn chỉnh với phong cách thiết kế phẳng (flat design vector)
-    if lang == 'zh':
-        prompt = f"Flat design educational vector illustration of {caption} ({word.word}). Modern clean graphic style, solid white background, no texts, no words, no letters, no typography."
+    # Lớp chỉ thị phong cách cốt lõi (Style Base) - Đảm bảo thẩm mỹ và chặn text tuyệt đối
+    style_base = (
+        "Flat design educational vector illustration. Modern clean graphic style, "
+        "infographic layout, solid white background, minimalist aesthetic, vibrant harmonious color palette. "
+        "Strictly NO text, no words, no letters, no labels, no typography, zero characters, clean diagram style."
+    )
+
+    # Kỹ thuật bóc tách khái niệm trực quan (Explaining via visual breakdown)
+    explanation_instruction = (
+        "The illustration must visually explain the concept. "
+        "Break down the subject into key functional elements, intuitive visual metaphors, "
+        "and symbolic components arranged in a clear, step-by-step flow or cohesive assembly."
+    )
+
+    if lang == 'zh' and word_obj:
+        # Lấy thuộc tính word hoặc key tùy theo cấu trúc object của muội
+        word_str = word_obj.word if hasattr(word_obj, 'word') else str(word_obj)
+    
+    # Đưa từ tiếng Trung vào làm ngữ cảnh ẩn dụ cho AI hiểu sâu hơn ý nghĩa,
+    # nhưng dặn AI KHÔNG được vẽ chữ đó ra.
+        prompt = (
+            f"{style_base} "
+            f"An educational diagram visually explaining the concept of '{caption}' (inspired by the meaning of '{word_str}'). "
+            f"{explanation_instruction}"
+        )   
     else:
-        prompt = f"Flat design educational vector illustration of {caption}. Modern clean graphic style, solid white background, no texts, no words, no letters, no typography."
-        
+        prompt = (
+            f"{style_base} "
+            f"An educational diagram visually explaining the concept of '{caption}'. "
+            f"{explanation_instruction}"
+        )
     return prompt
 
 

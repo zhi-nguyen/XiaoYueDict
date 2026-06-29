@@ -149,8 +149,17 @@ def import_full_exam_data(exam_json_file, audio_file=None, image_mapping_file=No
                         }
                     )
 
-    # Evict cache for this exam
+    # Evict cache for this exam and list caches
     cache.delete(f"exam:data:{exam_id}")
+    if hasattr(cache, 'client'):
+        try:
+            redis_client = cache.client.get_client()
+            keys = redis_client.keys("*exams:list:*")
+            if keys:
+                redis_client.delete(*keys)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to clear exam list cache: {e}")
 
     # Trigger background task to process and upload to GCS on commit
     transaction.on_commit(lambda: process_exam_media_task.delay(exam_id))

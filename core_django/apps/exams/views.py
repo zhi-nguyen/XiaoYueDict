@@ -37,6 +37,22 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
         # Detail view includes the full nested structure
         return ExamSerializer
 
+    def list(self, request, *args, **kwargs):
+        level = request.query_params.get('level', '')
+        language = request.query_params.get('language', '')
+
+        cache_key = f"exams:list:{level}:{language}"
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
+        response = super().list(request, *args, **kwargs)
+        if response.status_code == 200:
+            import random
+            ttl = 24 * 3600 + random.randint(0, 1800)  # 24 hours + jitter
+            cache.set(cache_key, response.data, timeout=ttl)
+        return response
+
     def get_queryset(self):
         queryset = super().get_queryset()
         if self.action in ['retrieve', 'full_exam']:
@@ -49,21 +65,32 @@ class ExamViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(language=language)
         return queryset
 
+    def retrieve(self, request, *args, **kwargs):
+        pk = kwargs.get('pk')
+        # Fast indexed query to fetch only the exam_id field
+        exam_id = Exam.objects.filter(pk=pk).values_list('exam_id', flat=True).first()
+        if not exam_id:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        cache_key = f"exam:data:{exam_id}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response(cached_data)
+
+        # Cache miss: fetch full object and run the prefetch JOINs
+        response = super().retrieve(request, *args, **kwargs)
+        if response.status_code == 200:
+            import random
+            ttl = 24 * 3600 + random.randint(0, 1800)  # 24 hours + jitter
+            cache.set(cache_key, response.data, timeout=ttl)
+        return response
+
     @action(detail=True, methods=['get'])
     def full_exam(self, request, pk=None):
         """
         Alias for retrieve to explicitly fetch full exam with sections, questions and options.
         """
-        exam = self.get_object()
-        cache_key = f"exam:data:{exam.exam_id}"
-        cached_data = cache.get(cache_key)
-        if cached_data:
-            return Response(cached_data)
-
-        serializer = ExamSerializer(exam)
-        data = serializer.data
-        cache.set(cache_key, data, timeout=24 * 60 * 60)  # 24 hours
-        return Response(data)
+        return self.retrieve(request, pk=pk)
 
     @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser], permission_classes=[permissions.IsAdminUser])
     def upload_full_exam(self, request):

@@ -562,7 +562,9 @@ class SystemNotebookListView(APIView):
         cache_key = f"system_notebooks_list_v2_{lang}"
         cached_data = cache.get(cache_key)
         if cached_data is not None:
-            return Response(cached_data)
+            response = Response(cached_data)
+            response['Cache-Control'] = 'public, max-age=86400, s-maxage=86400'
+            return response
         
         if lang == 'en':
             # 1. Fetch CEFR counts
@@ -669,7 +671,9 @@ class SystemNotebookListView(APIView):
             }
             
         cache.set(cache_key, res_data, 60 * 60 * 24)
-        return Response(res_data)
+        response = Response(res_data)
+        response['Cache-Control'] = 'public, max-age=86400, s-maxage=86400'
+        return response
 
 
 class SystemNotebookPagination(PageNumberPagination):
@@ -686,6 +690,29 @@ class SystemNotebookWordsView(generics.ListAPIView):
     - POS & Tag: chỉ Premium/Pro user được xem.
     """
     pagination_class = SystemNotebookPagination
+
+    def list(self, request, *args, **kwargs):
+        key = self.kwargs.get('key', '')
+        lang = self.request.query_params.get('lang', 'zh')
+        page = self.request.query_params.get('page', '1')
+
+        cache_key = f"system_notebook:words:{key}:{lang}:{page}"
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            response = Response(cached_data)
+        else:
+            response = super().list(request, *args, **kwargs)
+            if response.status_code == 200:
+                import random
+                ttl = 24 * 3600 + random.randint(0, 1800)
+                cache.set(cache_key, response.data, timeout=ttl)
+
+        if key.startswith('hsk_') or key.startswith('cefr_'):
+            response['Cache-Control'] = 'public, max-age=86400, s-maxage=86400'
+        else:
+            response['Cache-Control'] = 'private, no-store, no-cache, must-revalidate'
+
+        return response
 
     def get_serializer_class(self):
         key = self.kwargs.get('key', '')

@@ -94,13 +94,15 @@ def translate_en_pure_text_task(self, text_input, user_id=None, direction='en_vi
 
         if translated_text:
             from django.core.cache import cache
+            import hashlib
+            hashed_text = hashlib.md5(text_input.encode('utf-8')).hexdigest()
             result_data = {
                 'translatedText': translated_text,
                 'source': 'ai_translation',
                 'status': 'SUCCESS'
             }
             # Lưu cache dài hạn tiếng Anh tách biệt
-            cache.set(f"ai_trans_en:{direction}:{text_input}", {"status": "success", "result": result_data}, timeout=7 * 24 * 60 * 60)
+            cache.set(f"ai_trans_en:{direction}:{hashed_text}", {"status": "success", "result": result_data}, timeout=7 * 24 * 60 * 60)
             if user_id:
                 ws_notify(
                     user_id=user_id,

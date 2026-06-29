@@ -31,12 +31,12 @@ class EnWordSearchView(generics.ListAPIView):
 
         def db_lookup():
             exact_example = None
-            query_word_len = len(query.split())
+            cleaned_for_search = re.sub(r'[. , ! ? : ; ( ) \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
+            query_word_len = len(cleaned_for_search.split())
 
             if 1 <= query_word_len <= 30:
                 from .models import EnExample
                 cleaned_query_end = re.sub(r'[. , ! ?]+$', '', query)
-                cleaned_for_search = re.sub(r'[. , ! ? : ; ( ) \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
                 
                 if not is_vietnamese:
                     # English query flow: check exact english match first
@@ -62,12 +62,13 @@ class EnWordSearchView(generics.ListAPIView):
                         )
                 else:
                     # Vietnamese translation fallback: check vietnamese column only
-                    match = (
-                        EnExample.objects
-                        .filter(vietnamese__icontains=cleaned_for_search)
-                        .order_by(Length('vietnamese'))
-                        .first()
-                    )
+                    if cleaned_for_search and query_word_len >= 3:
+                        match = (
+                            EnExample.objects
+                            .filter(vietnamese__icontains=cleaned_for_search)
+                            .order_by(Length('vietnamese'))
+                            .first()
+                        )
                 
                 if match:
                     exact_example = {
@@ -78,7 +79,7 @@ class EnWordSearchView(generics.ListAPIView):
 
             # Check if there are matches in EnWord using fast B-tree queries
             if not is_vietnamese:
-                has_exact_word = EnWord.objects.filter(word__iexact=query).exists()
+                has_exact_word = EnWord.objects.filter(word__iexact=cleaned_for_search).exists()
                 has_data = has_exact_word or (exact_example is not None)
             else:
                 # For Vietnamese translation, check if translation_vi contains or fallback to exists
@@ -105,21 +106,37 @@ class EnWordSearchView(generics.ListAPIView):
         if gateway_response:
             return gateway_response
 
+        # Check cache for DB search results
+        page = request.query_params.get('page', '1')
+        import hashlib
+        hashed_query = hashlib.md5(query.encode('utf-8')).hexdigest()
+        cache_key = f"en:search:{hashed_query}:{page}"
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
         # DB Hit -> Lấy dữ liệu từ Closure tránh truy vấn trùng lặp
         queryset = db_shared_container['queryset']
         exact_example = db_shared_container['exact_example']
 
         page = self.paginate_queryset(queryset)
         if page is not None:
-            response = self.get_paginated_response(self.get_serializer(page, many=True).data)
-            response.data['exact_example_match'] = exact_example
-            return response
+            res_data = self.get_paginated_response(self.get_serializer(page, many=True).data).data
+            res_data['exact_example_match'] = exact_example
+            import random
+            ttl = 24 * 3600 + random.randint(0, 1800)  # 24h + jitter
+            cache.set(cache_key, res_data, timeout=ttl)
+            return Response(res_data)
 
         serializer = self.get_serializer(queryset, many=True)
-        return Response({
+        res_data = {
             'exact_example_match': exact_example,
             'results': serializer.data
-        })
+        }
+        import random
+        ttl = 24 * 3600 + random.randint(0, 1800)
+        cache.set(cache_key, res_data, timeout=ttl)
+        return Response(res_data)
 
     def get_queryset(self):
         query = self.request.query_params.get('q', '').strip()

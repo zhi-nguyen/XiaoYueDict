@@ -146,9 +146,17 @@ def process_exam_media_task(exam_id):
                                 except Exception as img_err:
                                     logger.error(f"❌ Failed to compress option image {local_path}: {img_err}")
 
-        # Evict cache for this exam
+        # Evict cache for this exam and exam lists
         from django.core.cache import cache
         cache.delete(f"exam:data:{exam_id}")
+        if hasattr(cache, 'client'):
+            try:
+                redis_client = cache.client.get_client()
+                keys = redis_client.keys("*exams:list:*")
+                if keys:
+                    redis_client.delete(*keys)
+            except Exception as e:
+                logger.warning(f"Failed to clear exam list cache: {e}")
         logger.info(f"✅ Finished database updates and GCS uploads for exam: {exam_id}")
 
     except Exception as tx_err:

@@ -68,7 +68,10 @@ class AIFallbackGateway:
 
         if query and not db_hit:
             # Tra cứu bộ nhớ đệm AI (Redis Cache)
-            ai_cache_key = f"{cache_key_prefix}:{query}"
+            direction = "zh_vi" if mode == 'zh' else "en_vi"
+            import hashlib
+            hashed_query = hashlib.md5(query.encode('utf-8')).hexdigest()
+            ai_cache_key = f"{cache_key_prefix}:{direction}:{hashed_query}"
             cached_data = cache.get(ai_cache_key)
 
             if cached_data:

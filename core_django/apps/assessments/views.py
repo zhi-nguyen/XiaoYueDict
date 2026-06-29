@@ -246,8 +246,23 @@ class SpellCheckView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        cleaned_text = text.strip()
+        import hashlib
+        hashed_text = hashlib.md5(cleaned_text.encode('utf-8')).hexdigest()
+        cache_key = f"spellcheck:{hashed_text}"
+
+        from django.core.cache import cache
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data, status=status.HTTP_200_OK)
+
         from .spellcheck import check_english_text
         result = check_english_text(text)
+
+        # Cache results for 1 hour + jitter (up to 5 minutes)
+        import random
+        ttl = 3600 + random.randint(0, 300)
+        cache.set(cache_key, result, timeout=ttl)
 
         return Response(result, status=status.HTTP_200_OK)
 

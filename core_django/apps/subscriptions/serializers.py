@@ -1,12 +1,24 @@
 from rest_framework import serializers
-from .models import UserSubscription, SubscriptionHistory, SubscriptionPlan, PaymentOrder
+from .models import UserSubscription, SubscriptionHistory, SubscriptionPlan, PaymentOrder, VolumeLimitConfig
+
+class VolumeLimitConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VolumeLimitConfig
+        fields = ['mb_per_minute', 'mb_per_hour', 'mb_per_day', 'pdf_daily_limit', 'pdf_word_limit']
 
 class SubscriptionPlanSerializer(serializers.ModelSerializer):
     total_price = serializers.ReadOnlyField()
+    limits = serializers.SerializerMethodField()
 
     class Meta:
         model = SubscriptionPlan
-        fields = ['id', 'tier', 'price', 'vat', 'total_price', 'description']
+        fields = ['id', 'tier', 'price', 'vat', 'total_price', 'description', 'limits']
+
+    def get_limits(self, obj):
+        config = VolumeLimitConfig.objects.filter(tier=obj.tier).first()
+        if config:
+            return VolumeLimitConfigSerializer(config).data
+        return None
 
 class UserSubscriptionSerializer(serializers.ModelSerializer):
     total_price = serializers.ReadOnlyField()

@@ -26,6 +26,20 @@ class SubscriptionPlanListView(generics.ListAPIView):
     permission_classes = [AllowAny]
     queryset = SubscriptionPlan.objects.all().order_by('price')
 
+    def list(self, request, *args, **kwargs):
+        from django.core.cache import cache
+        cache_key = "subscription:plans"
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
+        response = super().list(request, *args, **kwargs)
+        if response.status_code == 200:
+            import random
+            ttl = 24 * 3600 + random.randint(0, 1800)  # 24 hours + jitter
+            cache.set(cache_key, response.data, timeout=ttl)
+        return response
+
 
 class SubscriptionRegisterView(APIView):
     """

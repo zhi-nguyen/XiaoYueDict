@@ -44,19 +44,19 @@ class ZhWordSearchView(generics.ListAPIView):
         if fallback_param:
             def db_lookup():
                 exact_example = None
+                cleaned_for_search = re.sub(r'[。，、！？. , ! ? : ： ; ； ( ) （ ） \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
                 query_len = len(query)
 
                 # 1. Check exact examples using language-specific fast checks
                 if 2 <= query_len <= 100:
                     from .models import ZhExample
                     cleaned_query_end = re.sub(r'[。，、！？. , ! ?]+$', '', query)
-                    cleaned_for_search = re.sub(r'[。，、！？. , ! ? : ： ; ； ( ) （ ） \[ \] { } “ ” ‘ ’ \' "]+', ' ', query).strip()
                     
                     if is_chinese:
                         # For Chinese, exact sentence match only
                         regex_pattern = r'^' + re.escape(cleaned_query_end) + r'[。，、！？. , ! ?]*$'
                         match = ZhExample.objects.filter(chinese__iregex=regex_pattern).first()
-                        if not match and cleaned_for_search:
+                        if not match and cleaned_for_search and len(cleaned_for_search) > 4:
                             match = ZhExample.objects.filter(chinese__icontains=cleaned_for_search).first()
                     else:
                         # For Latin/Vietnamese/English queries
@@ -72,11 +72,12 @@ class ZhWordSearchView(generics.ListAPIView):
 
                 # 2. Check if there are matches in ZhWord using very fast B-tree index queries
                 if is_chinese:
-                    has_exact_word = ZhWord.objects.filter(Q(word=query) | Q(traditional=query)).exists()
+                    has_exact_word = ZhWord.objects.filter(Q(word=cleaned_for_search) | Q(traditional=cleaned_for_search)).exists()
                     has_data = has_exact_word or (exact_example is not None)
                 else:
                     # For English/Pinyin, check exact pinyin or translation_vi startswith (fast indexed scan)
-                    has_exact_pinyin = ZhWord.objects.filter(Q(pinyin=q_lower) | Q(toneless_pinyin=q_lower)).exists()
+                    q_clean_lower = cleaned_for_search.lower()
+                    has_exact_pinyin = ZhWord.objects.filter(Q(pinyin=q_clean_lower) | Q(toneless_pinyin=q_clean_lower)).exists()
                     if has_exact_pinyin:
                         has_data = True
                     else:
@@ -108,21 +109,38 @@ class ZhWordSearchView(generics.ListAPIView):
             db_shared_container['queryset'] = queryset
             db_shared_container['exact_example'] = None
 
+        # Check cache for DB search results
+        hsk = request.query_params.get('hsk', '').strip()
+        page = request.query_params.get('page', '1')
+        import hashlib
+        hashed_query = hashlib.md5(query.encode('utf-8')).hexdigest()
+        cache_key = f"zh:search:{hashed_query}:{hsk}:{page}"
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
         # Phục hồi dữ liệu từ Closure, triệt tiêu Double Query!
         queryset = db_shared_container['queryset']
         exact_example = db_shared_container['exact_example']
 
         page = self.paginate_queryset(queryset)
         if page is not None:
-            response = self.get_paginated_response(self.get_serializer(page, many=True).data)
-            response.data['exact_example_match'] = exact_example
-            return response
+            res_data = self.get_paginated_response(self.get_serializer(page, many=True).data).data
+            res_data['exact_example_match'] = exact_example
+            import random
+            ttl = 24 * 3600 + random.randint(0, 1800)  # 24h + jitter
+            cache.set(cache_key, res_data, timeout=ttl)
+            return Response(res_data)
 
         serializer = self.get_serializer(queryset, many=True)
-        return Response({
+        res_data = {
             'exact_example_match': exact_example,
             'results': serializer.data
-        })
+        }
+        import random
+        ttl = 24 * 3600 + random.randint(0, 1800)
+        cache.set(cache_key, res_data, timeout=ttl)
+        return Response(res_data)
 
 
     def get_queryset(self):
@@ -338,10 +356,37 @@ class ZhWordBatchSearchView(generics.ListAPIView):
             if not chars:
                 return Response({'results': []})
             
-            # Query nhanh không kèm ví dụ để giảm tải DB và payload size
-            queryset = ZhWord.objects.filter(word__in=chars)
+            # Tối ưu hóa bằng Redis cache.get_many()
+            keys_map = {f"zh:char:{c}": c for c in chars}
+            redis_keys = list(keys_map.keys())
+            
+            cached_results = cache.get_many(redis_keys)
+            missing_chars = [keys_map[k] for k in redis_keys if k not in cached_results]
+            
+            new_serialized_data = {}
+            if missing_chars:
+                # Query nhanh không kèm ví dụ để giảm tải DB và payload size
+                queryset = ZhWord.objects.filter(word__in=missing_chars)
+                serializer = self.get_serializer(queryset, many=True)
+                
+                # Lưu các kết quả mới tìm được vào Redis
+                to_cache = {f"zh:char:{item['word']}": item for item in serializer.data}
+                if to_cache:
+                    import random
+                    ttl = 7 * 24 * 3600 + random.randint(0, 3600)  # 7 days + jitter
+                    cache.set_many(to_cache, timeout=ttl)
+                
+                new_serialized_data = to_cache
+
+            # Lắp ráp kết quả cuối cùng theo thứ tự danh sách chữ đầu vào
+            final_results = []
+            for c in chars:
+                cache_key = f"zh:char:{c}"
+                if cache_key in cached_results:
+                    final_results.append(cached_results[cache_key])
+                elif cache_key in new_serialized_data:
+                    final_results.append(new_serialized_data[cache_key])
         else:
             return Response({'error': 'Invalid type parameter'}, status=400)
             
-        serializer = self.get_serializer(queryset, many=True)
-        return Response({'results': serializer.data})
+        return Response({'results': final_results})
