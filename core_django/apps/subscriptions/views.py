@@ -126,8 +126,11 @@ class SePayWebhookView(APIView):
     def post(self, request, *args, **kwargs):
         # 1. Xác thực HMAC signature
         signature = request.headers.get('Authorization', '')
-        # SePay gửi signature dạng "Hmac <hex_signature>" hoặc trực tiếp
-        if signature.startswith('Hmac '):
+        if not signature:
+            signature = request.headers.get('X-SePay-Signature', '')
+            if signature.startswith('sha256='):
+                signature = signature[7:]
+        elif signature.startswith('Hmac '):
             signature = signature[5:]
 
         payment_service = SePayPaymentService()
