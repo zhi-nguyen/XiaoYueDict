@@ -79,3 +79,22 @@ def expire_pending_payment_orders():
         logger.info(f"Expired {expired_count} pending payment orders.")
 
     return f"Expired {expired_count} pending payment orders."
+
+
+@shared_task
+def notify_payment_success_task(user_id, order_id, target_tier):
+    """
+    Gửi thông báo nâng cấp gói thành công tới client qua WebSocket (chạy ngầm).
+    """
+    from core_project.ws_utils import ws_notify
+    ws_notify(
+        user_id=user_id,
+        event_type="subscription_change",
+        title=f"Chúc mừng! Bạn đã nâng cấp thành công gói {target_tier.upper()}.",
+        payload={
+            "order_id": str(order_id),
+            "status": "PAID",
+            "tier": target_tier
+        },
+        persist=True
+    )

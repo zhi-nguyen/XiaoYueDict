@@ -176,6 +176,18 @@ class SePayPaymentService:
             # Nâng cấp subscription
             self._upgrade_user_subscription(order)
 
+            # Kích hoạt thông báo Real-time
+            try:
+                from .tasks import notify_payment_success_task
+                notify_payment_success_task.delay(
+                    user_id=str(order.user.id),
+                    order_id=str(order.id),
+                    target_tier=order.target_tier
+                )
+                logger.info(f"Triggered WebSocket notification task for order {order_code}")
+            except Exception as e:
+                logger.error(f"Failed to queue notification task: {e}")
+
         logger.info(
             f"Payment confirmed for order {order_code}: "
             f"user={order.user.username}, tier={order.target_tier}, amount={amount}"
