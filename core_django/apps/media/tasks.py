@@ -76,13 +76,13 @@ def _resolve_image_prompt(word_id, lang, word):
     # nhưng dặn AI KHÔNG được vẽ chữ đó ra.
         prompt = (
             f"{style_base} "
-            f"An educational diagram visually explaining the concept of '{caption}' (inspired by the meaning of '{word_str}'). "
+            f"An educational diagram visually explaining the concept of '{caption}' (inspired by the meaning of '{word_str}'). Strictly NO text, no words, no letters, no labels, no typography, zero characters, clean diagram style. "
             f"{explanation_instruction}"
         )   
     else:
         prompt = (
             f"{style_base} "
-            f"An educational diagram visually explaining the concept of '{caption}'. "
+            f"An educational diagram visually explaining the concept of '{caption}'. Strictly NO text, no words, no letters, no labels, no typography, zero characters, clean diagram style."
             f"{explanation_instruction}"
         )
     return prompt
