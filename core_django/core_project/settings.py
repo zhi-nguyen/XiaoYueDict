@@ -159,6 +159,7 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh'
+CELERY_TASK_DEFAULT_QUEUE = 'queue_core'
 
 from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
