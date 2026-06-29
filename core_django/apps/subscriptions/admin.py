@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import UserSubscription, SubscriptionHistory, VolumeLimitConfig, SubscriptionPlan
+from .models import UserSubscription, SubscriptionHistory, VolumeLimitConfig, SubscriptionPlan, PaymentOrder
 
 @admin.register(SubscriptionPlan)
 class SubscriptionPlanAdmin(admin.ModelAdmin):
@@ -9,8 +9,8 @@ class SubscriptionPlanAdmin(admin.ModelAdmin):
 
 @admin.register(UserSubscription)
 class UserSubscriptionAdmin(admin.ModelAdmin):
-    list_display = ('user', 'tier', 'price', 'vat', 'total_price_display', 'start_date', 'end_date', 'is_active')
-    list_filter = ('tier', 'is_active')
+    list_display = ('user', 'tier', 'pending_downgrade_tier', 'price', 'vat', 'total_price_display', 'start_date', 'end_date', 'is_active')
+    list_filter = ('tier', 'is_active', 'pending_downgrade_tier')
     search_fields = ('user__username', 'user__email')
     readonly_fields = ('total_price_display',)
 
@@ -30,3 +30,9 @@ class VolumeLimitConfigAdmin(admin.ModelAdmin):
     list_filter = ('tier',)
     search_fields = ('tier',)
 
+@admin.register(PaymentOrder)
+class PaymentOrderAdmin(admin.ModelAdmin):
+    list_display = ('order_code', 'user', 'target_tier', 'amount', 'status', 'created_at', 'expires_at', 'paid_at')
+    list_filter = ('status', 'target_tier')
+    search_fields = ('order_code', 'user__username', 'user__email', 'sepay_transaction_id')
+    readonly_fields = ('id', 'order_code', 'sepay_transaction_id', 'bank_reference', 'created_at', 'paid_at')

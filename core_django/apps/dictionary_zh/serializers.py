@@ -17,3 +17,12 @@ class ZhWordSerializer(serializers.ModelSerializer):
             'radical', 'stroke_number', 'components', 'synonyms', 'antonyms',
             'tags', 'word_frequency', 'popularity_rank', 'audio_url', 'image_url', 'examples'
         ]
+
+class ZhCharacterBriefSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ZhWord
+        fields = [
+            'id', 'word', 'traditional', 'pinyin', 'han_viet',
+            'translation_vi', 'radical', 'stroke_number',
+            'components', 'popularity_rank'
+        ]

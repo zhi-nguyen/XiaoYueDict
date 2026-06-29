@@ -64,6 +64,11 @@ def generate_pdf_task(self, task_id, notebook_id, user_id, words_data, safe_opti
         logger.info(f"Successfully generated PDF for task: {task_id}")
 
         # Send WebSocket notification
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        pdf_expires_at = timezone.now() + timedelta(hours=1)
+
         ws_notify(
             user_id=user_id,
             event_type='pdf_complete',
@@ -71,8 +76,11 @@ def generate_pdf_task(self, task_id, notebook_id, user_id, words_data, safe_opti
             payload={
                 'task_id': str(task_id),
                 'notebook_id': notebook_id,
-                'status': 'COMPLETED'
-            }
+                'status': 'COMPLETED',
+                'download_url': f'/notes/notebooks/export-pdf/download/{task_id}/',
+                'expires_at': pdf_expires_at.isoformat(),
+            },
+            expires_at=pdf_expires_at,
         )
 
         return {"status": "success", "task_id": str(task_id)}

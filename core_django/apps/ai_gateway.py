@@ -1,5 +1,6 @@
 import re
 import logging
+import hashlib
 from rest_framework.response import Response
 from rest_framework import status
 from django.core.cache import cache
@@ -68,7 +69,9 @@ class AIFallbackGateway:
         if query and not db_hit:
             # Tra cứu bộ nhớ đệm AI (Redis Cache)
             direction = "zh_vi" if mode == 'zh' else "en_vi"
-            ai_cache_key = f"{cache_key_prefix}:{direction}:{query}"
+            import hashlib
+            hashed_query = hashlib.md5(query.encode('utf-8')).hexdigest()
+            ai_cache_key = f"{cache_key_prefix}:{direction}:{hashed_query}"
             cached_data = cache.get(ai_cache_key)
 
             if cached_data:
@@ -77,9 +80,27 @@ class AIFallbackGateway:
                 if cached_data.get('status') == 'processing':
                     return Response({"status": "PENDING", "task_id": cached_data['task_id']}, status=status.HTTP_202_ACCEPTED)
 
-            # Khống chế giới hạn Conditional Rate Limit (3 lần/phút)
+            # Khống chế giới hạn Conditional Rate Limit theo Tier tài khoản (Tránh throttling khi tìm kiếm chuỗi ký tự dài)
             user = request.user
-            ident = f"user_{user.id}" if user.is_authenticated else f"ip_{cls.get_client_ip(request)}"
+            if not user or not user.is_authenticated:
+                ai_limit = 15  # Guest: 15 lần/phút
+            else:
+                try:
+                    tier = user.subscription.tier if hasattr(user, 'subscription') else 'Free'
+                except Exception:
+                    tier = 'Free'
+                
+                tier = tier.lower()
+                if tier == 'plus':
+                    ai_limit = 60   # Plus: 60 lần/phút
+                elif tier == 'pro':
+                    ai_limit = 100  # Pro: 100 lần/phút
+                elif tier == 'premium':
+                    ai_limit = 120  # Premium: 120 lần/phút
+                else:
+                    ai_limit = 30   # Free: 30 lần/phút
+
+            ident = f"user_{user.id}" if user and user.is_authenticated else f"ip_{cls.get_client_ip(request)}"
             ai_throttle_key = f"throttle:ai_fallback:{ident}"
             
             try:
@@ -91,9 +112,9 @@ class AIFallbackGateway:
                 current_ai_requests = cache.get(ai_throttle_key, 0) + 1
                 cache.set(ai_throttle_key, current_ai_requests, timeout=60)
 
-            if current_ai_requests > 3:
+            if current_ai_requests > ai_limit:
                 return Response(
-                    {"detail": "Tài khoản đã vượt định mức dịch thuật bằng AI. Vui lòng thử lại sau ít phút."}, 
+                    {"detail": f"Tài khoản đã vượt định mức dịch thuật bằng AI của gói hiện tại ({ai_limit} lần/phút). Vui lòng thử lại sau ít phút."}, 
                     status=status.HTTP_429_TOO_MANY_REQUESTS
                 )
 
@@ -198,7 +219,8 @@ class AIFallbackGateway:
                             'status': 'SUCCESS'
                         }, status=status.HTTP_200_OK)
 
-        ai_cache_key = f"{cache_key_prefix}:{direction}:{text_input}"
+        hashed_text = hashlib.md5(text_input.encode('utf-8')).hexdigest()
+        ai_cache_key = f"{cache_key_prefix}:{direction}:{hashed_text}"
         cached_data = cache.get(ai_cache_key)
 
         if cached_data:

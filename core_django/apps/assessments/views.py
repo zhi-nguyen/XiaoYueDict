@@ -12,7 +12,18 @@ import logging
 from apps.subscriptions.middleware import refund_volume_limit
 from .utils import is_service_available
 
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
+
 logger = logging.getLogger(__name__)
+
+
+class SubmitAssessmentAnonThrottle(AnonRateThrottle):
+    rate = '5/minute'
+
+
+class SubmitAssessmentUserThrottle(UserRateThrottle):
+    rate = '20/minute'
+
 
 class SubmitAssessmentView(APIView):
     """
@@ -21,6 +32,7 @@ class SubmitAssessmentView(APIView):
     Saves audio to disk, enqueues a Celery task, returns task_id immediately.
     """
     parser_classes = (MultiPartParser, FormParser)
+    throttle_classes = (SubmitAssessmentAnonThrottle, SubmitAssessmentUserThrottle)
 
     def post(self, request, *args, **kwargs):
         # 0. Kiểm tra bảo trì
@@ -40,8 +52,33 @@ class SubmitAssessmentView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Chặn cứng tệp tin > 2MB
-        if audio_file.size > 2 * 1024 * 1024:
+        # 1. Xác định phân cấp tài khoản người dùng
+        if request.user and request.user.is_authenticated:
+            user_tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
+        else:
+            user_tier = 'Guest'
+
+        # Định nghĩa các hạn mức tối đa cho từng gói
+        tier_duration_limits = {
+            'Guest': 15,
+            'Free': 30,
+            'Plus': 60,
+            'Pro': 120,
+            'Premium': 120
+        }
+        tier_size_limits = {
+            'Guest': 250 * 1024,      # 250 KB
+            'Free': 500 * 1024,       # 500 KB
+            'Plus': 1024 * 1024,      # 1 MB
+            'Pro': 2 * 1024 * 1024,   # 2 MB
+            'Premium': 2 * 1024 * 1024 # 2 MB
+        }
+
+        duration_limit = tier_duration_limits.get(user_tier, 30)
+        size_limit = tier_size_limits.get(user_tier, 500 * 1024)
+
+        # 2. Kiểm tra giới hạn dung lượng tệp tin (Dynamic Payload check)
+        if audio_file.size > size_limit:
             guest_id = request.data.get('guest_id')
             rate_limit_user_id = getattr(request, 'rate_limit_user_id', None)
             if not rate_limit_user_id:
@@ -52,8 +89,9 @@ class SubmitAssessmentView(APIView):
                     rate_limit_user_id = f"guest:{identifier}"
             
             refund_volume_limit(rate_limit_user_id, audio_file.size)
+            limit_display = f"{size_limit / (1024 * 1024):.2f}MB" if size_limit >= 1024 * 1024 else f"{size_limit / 1024:.0f}KB"
             return Response(
-                {'error': 'Dung lượng tệp ghi âm vượt quá giới hạn tối đa cho phép (2MB).'},
+                {'error': f'Dung lượng tệp ghi âm vượt quá giới hạn tối đa cho phép cho gói của bạn ({limit_display}).'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -67,13 +105,11 @@ class SubmitAssessmentView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Determine the subscription tier and route to the correct physical queue
-        if request.user and request.user.is_authenticated:
-            tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
-            if tier in ('Plus', 'Premium', 'Pro'):
-                target_queue = 'queue_paid'
-            else:
-                target_queue = 'queue_free'
+        # Ánh xạ phân cấp sang hàng đợi tương ứng trên Celery
+        if user_tier in ('Plus', 'Premium', 'Pro'):
+            target_queue = 'queue_paid'
+        elif user_tier == 'Free':
+            target_queue = 'queue_free'
         else:
             target_queue = 'queue_guest'
 
@@ -98,40 +134,7 @@ class SubmitAssessmentView(APIView):
                 identifier = guest_id if guest_id else request.META.get('REMOTE_ADDR', 'anonymous')
                 rate_limit_user_id = f"guest:{identifier}"
 
-        # Đo thời lượng bằng ffprobe có timeout
-        duration = 0
-        has_error = False
-        error_msg = ''
-        try:
-            cmd = [
-                'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-                '-of', 'default=noprint_wrappers=1:nokey=1', task.audio_file.path
-            ]
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
-            if result.returncode == 0:
-                duration = float(result.stdout.strip())
-                if duration > 45:
-                    has_error = True
-                    error_msg = 'Thời lượng tệp ghi âm vượt quá giới hạn tối đa cho phép (45 giây).'
-            else:
-                has_error = True
-                error_msg = 'Tệp âm thanh không hợp lệ hoặc không thể phân tích.'
-        except subprocess.TimeoutExpired:
-            has_error = True
-            error_msg = 'Quá thời gian phân tích thời lượng tệp ghi âm (Metadata Timeout).'
-        except Exception as e:
-            has_error = True
-            error_msg = f'Lỗi phân tích cú pháp tệp tin: {str(e)}'
-
-        if has_error:
-            try:
-                if task.audio_file and os.path.exists(task.audio_file.path):
-                    task.audio_file.delete()
-                task.delete()
-            finally:
-                refund_volume_limit(rate_limit_user_id, audio_file.size)
-            return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
-
+        # Trigger Celery task asynchronously. Duration limits are validated on the worker node.
         process_audio_task.apply_async(
             args=[
                 str(task.id),
@@ -142,9 +145,11 @@ class SubmitAssessmentView(APIView):
             ],
             kwargs={
                 'rate_limit_user_id': rate_limit_user_id,
+                'duration_limit': duration_limit,
             },
             queue=target_queue
         )
+
 
         # Return initial queue position relative to its specific physical queue
         pending_ahead = AssessmentTask.objects.filter(
@@ -160,6 +165,11 @@ class SubmitAssessmentView(APIView):
         concurrency = 2 if target_queue == 'queue_paid' else 1
         processing_time_per_task = 7  # seconds
         estimated_wait_seconds = math.ceil(queue_position / concurrency) * processing_time_per_task
+
+        # Store guest_id mapping in Redis for guest tasks (IDOR protection)
+        if not request.user.is_authenticated and guest_id:
+            from django.core.cache import cache
+            cache.set(f"task_guest:{task.id}", str(guest_id), timeout=86400)  # 24 hours
 
         return Response(
             {
@@ -194,6 +204,17 @@ class AssessmentStatusView(APIView):
                     {'error': 'Permission denied. This task belongs to another user.'},
                     status=status.HTTP_403_FORBIDDEN,
                 )
+        else:
+            # Guest task protection
+            from django.core.cache import cache
+            cached_guest_id = cache.get(f"task_guest:{task.id}")
+            if cached_guest_id:
+                request_guest_id = request.data.get('guest_id') or request.query_params.get('guest_id') or request.headers.get('X-Guest-ID')
+                if request_guest_id != cached_guest_id:
+                    return Response(
+                        {'error': 'Permission denied. This task belongs to another guest.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
         serializer = AssessmentTaskSerializer(task)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -225,8 +246,23 @@ class SpellCheckView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        cleaned_text = text.strip()
+        import hashlib
+        hashed_text = hashlib.md5(cleaned_text.encode('utf-8')).hexdigest()
+        cache_key = f"spellcheck:{hashed_text}"
+
+        from django.core.cache import cache
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data, status=status.HTTP_200_OK)
+
         from .spellcheck import check_english_text
         result = check_english_text(text)
+
+        # Cache results for 1 hour + jitter (up to 5 minutes)
+        import random
+        ttl = 3600 + random.randint(0, 300)
+        cache.set(cache_key, result, timeout=ttl)
 
         return Response(result, status=status.HTTP_200_OK)
 
@@ -261,6 +297,17 @@ class RefundAssessmentView(APIView):
                     {'error': 'Permission denied.'},
                     status=status.HTTP_403_FORBIDDEN,
                 )
+        else:
+            # Guest task protection
+            from django.core.cache import cache
+            cached_guest_id = cache.get(f"task_guest:{task.id}")
+            if cached_guest_id:
+                request_guest_id = request.data.get('guest_id') or request.query_params.get('guest_id') or request.headers.get('X-Guest-ID')
+                if request_guest_id != cached_guest_id:
+                    return Response(
+                        {'error': 'Permission denied.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
         # Check if the task is already completed
         if task.status == 'COMPLETED':

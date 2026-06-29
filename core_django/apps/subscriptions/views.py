@@ -1,11 +1,211 @@
+import logging
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .models import UserSubscription, SubscriptionHistory
-from .serializers import UserSubscriptionSerializer, SubscriptionHistorySerializer
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+
+from .models import UserSubscription, SubscriptionHistory, SubscriptionPlan, PaymentOrder
+from .serializers import (
+    UserSubscriptionSerializer,
+    SubscriptionHistorySerializer,
+    SubscriptionPlanSerializer,
+    SubscriptionRegisterSerializer,
+    PaymentOrderSerializer,
+)
+from .services import SePayPaymentService, SubscriptionManager
 from core_project.ws_utils import get_redis_client
+
+logger = logging.getLogger(__name__)
+
+
+class SubscriptionPlanListView(generics.ListAPIView):
+    serializer_class = SubscriptionPlanSerializer
+    permission_classes = [AllowAny]
+    queryset = SubscriptionPlan.objects.all().order_by('price')
+
+    def list(self, request, *args, **kwargs):
+        from django.core.cache import cache
+        cache_key = "subscription:plans"
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
+        response = super().list(request, *args, **kwargs)
+        if response.status_code == 200:
+            import random
+            ttl = 24 * 3600 + random.randint(0, 1800)  # 24 hours + jitter
+            cache.set(cache_key, response.data, timeout=ttl)
+        return response
+
+
+class SubscriptionRegisterView(APIView):
+    """
+    Nâng cấp / Hạ cấp gói subscription.
+
+    - Nâng cấp: Tạo PaymentOrder (PENDING) + trả QR data cho client.
+    - Hạ cấp: Deferred downgrade (giữ quyền lợi đến hết kỳ) hoặc tức thì nếu là Premium.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = SubscriptionRegisterSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        target_tier = serializer.validated_data['tier']
+        user = request.user
+
+        manager = SubscriptionManager()
+
+        try:
+            tiers = ['Free', 'Plus', 'Pro', 'Premium']
+            sub = getattr(user, 'subscription', None)
+            if not sub:
+                sub = UserSubscription.objects.create(user=user, tier='Free')
+
+            current_idx = tiers.index(sub.tier)
+            target_idx = tiers.index(target_tier)
+
+            if target_idx == current_idx:
+                return Response(
+                    {'error': f"Bạn đang sử dụng gói {target_tier} rồi."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            elif target_idx > current_idx:
+                # Nâng cấp → tạo đơn thanh toán, trả QR
+                result = manager.initiate_upgrade(user, target_tier)
+                return Response(result, status=status.HTTP_200_OK)
+            else:
+                # Hạ cấp
+                result = manager.request_downgrade(user, target_tier)
+                sub_serializer = UserSubscriptionSerializer(user.subscription)
+                return Response({
+                    'status': result['status'],
+                    'message': 'Yêu cầu xử lý thành công.',
+                    'subscription': sub_serializer.data
+                }, status=status.HTTP_200_OK)
+
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except RuntimeError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception("Unexpected error in SubscriptionRegisterView")
+            return Response(
+                {'error': 'Có lỗi hệ thống xảy ra. Vui lòng liên hệ hỗ trợ.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class CancelDowngradeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        manager = SubscriptionManager()
+
+        try:
+            result = manager.cancel_downgrade(user)
+            sub_serializer = UserSubscriptionSerializer(user.subscription)
+            return Response({
+                'status': result['status'],
+                'message': "Đã hủy yêu cầu hạ cấp thành công.",
+                'subscription': sub_serializer.data
+            }, status=status.HTTP_200_OK)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception("Unexpected error in CancelDowngradeView")
+            return Response(
+                {'error': 'Có lỗi hệ thống xảy ra.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class SePayWebhookView(APIView):
+    """
+    Nhận IPN (Instant Payment Notification) từ SePay.
+    
+    Endpoint công khai (AllowAny), xác thực bằng HMAC-SHA256 signature.
+    Không throttle — SePay cần gửi bất cứ lúc nào.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []  # Không dùng JWT auth
+    throttle_classes = []  # Không throttle webhook
+
+    def post(self, request, *args, **kwargs):
+        # 1. Xác thực HMAC signature
+        signature = request.headers.get('Authorization', '')
+        if not signature:
+            signature = request.headers.get('X-SePay-Signature', '')
+            if signature.startswith('sha256='):
+                signature = signature[7:]
+        elif signature.startswith('Hmac '):
+            signature = signature[5:]
+
+        timestamp = request.headers.get('X-SePay-Timestamp')
+        payment_service = SePayPaymentService()
+
+        if not payment_service.verify_webhook_signature(request.body, signature, timestamp=timestamp):
+            logger.warning("SePay webhook signature verification failed!")
+            return Response(
+                {'success': False, 'message': 'Invalid signature'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        # 2. Parse payload
+        try:
+            payload = request.data
+        except Exception:
+            return Response(
+                {'success': False, 'message': 'Invalid payload'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 3. Xử lý webhook
+        try:
+            result = payment_service.handle_webhook(payload)
+            return Response(result, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.exception(f"Error processing SePay webhook: {e}")
+            return Response(
+                {'success': False, 'message': 'Internal error'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class PaymentStatusView(APIView):
+    """Client polling để kiểm tra trạng thái thanh toán."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, order_id, *args, **kwargs):
+        try:
+            order = PaymentOrder.objects.get(id=order_id, user=request.user)
+        except PaymentOrder.DoesNotExist:
+            return Response(
+                {'error': 'Đơn thanh toán không tồn tại.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Auto-expire nếu đã quá hạn
+        if order.is_expired:
+            order.status = 'EXPIRED'
+            order.save(update_fields=['status'])
+
+        data = PaymentOrderSerializer(order).data
+
+        # Nếu đã thanh toán, kèm theo subscription info
+        if order.status == 'PAID':
+            sub = getattr(request.user, 'subscription', None)
+            if sub:
+                data['subscription'] = UserSubscriptionSerializer(sub).data
+
+        return Response(data, status=status.HTTP_200_OK)
+
 
 class MySubscriptionView(generics.RetrieveAPIView):
     serializer_class = UserSubscriptionSerializer
@@ -18,9 +218,13 @@ class MySubscriptionView(generics.RetrieveAPIView):
             sub.check_validity()
         return sub
 
+
+from apps.dictionary_zh.views import StandardResultsSetPagination
+
 class SubscriptionHistoryListView(generics.ListAPIView):
     serializer_class = SubscriptionHistorySerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
         return SubscriptionHistory.objects.filter(user=self.request.user).order_by('-changed_at')
@@ -87,4 +291,3 @@ class SubscriptionUsageView(APIView):
             'used_day': used_day,
             'service_available': is_service_available()
         }, status=status.HTTP_200_OK)
-

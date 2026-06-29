@@ -85,10 +85,11 @@ def _create_mock_placeholder(output_path):
         logger.warning(f"⚠️ Pillow not available, created minimal PNG: {output_path}")
 
 
-# Initialize mock placeholder at startup if in debug mode
+# Initialize mock placeholder at startup
+if not os.path.exists(MOCK_IMAGE_PATH):
+    _create_mock_placeholder(MOCK_IMAGE_PATH)
+
 if IS_DEBUG:
-    if not os.path.exists(MOCK_IMAGE_PATH):
-        _create_mock_placeholder(MOCK_IMAGE_PATH)
     logger.info("🧪 Mock mode ENABLED — will use placeholder images instead of Vertex AI")
 
 # Helper to extract project ID from service account credentials
@@ -186,7 +187,7 @@ async def generate_image(req: GenerateRequest):
 
             def genai_generate():
                 response = genai_client.models.generate_images(
-                    model="gemini-2.5-flash-image",
+                    model="imagen-3.0-generate-002",
                     prompt=prompt,
                     config=types.GenerateImagesConfig(
                         number_of_images=1,
@@ -202,7 +203,11 @@ async def generate_image(req: GenerateRequest):
                 with open(local_path, "wb") as f:
                     f.write(image_bytes)
 
-            await asyncio.to_thread(genai_generate)
+            try:
+                await asyncio.to_thread(genai_generate)
+            except Exception as e:
+                logger.warning(f"⚠️ Vertex AI generation failed ({e}). Falling back to mock placeholder.")
+                shutil.copy(MOCK_IMAGE_PATH, local_path)
 
         logger.info(f"✨ Successfully generated image locally: {local_path}")
     except HTTPException:

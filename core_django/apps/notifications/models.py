@@ -4,12 +4,13 @@ from django.conf import settings
 
 
 class Notification(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     """
     Persistent notification storage — ensures no notification is lost
     when user is offline. Redis Pub/Sub is fire-and-forget, so we
     always save to DB first, then publish to WebSocket.
     """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     NOTIFICATION_TYPES = [
         ('score_complete', 'Score Complete'),
@@ -31,6 +32,11 @@ class Notification(models.Model):
     title = models.CharField(max_length=200)
     payload = models.JSONField(default=dict, blank=True)
     is_read = models.BooleanField(default=False)
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Thời điểm notification hết hạn tương tác (e.g. PDF download link 1h)"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -41,3 +47,4 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"[{self.notification_type}] {self.title} → {self.user.username}"
+

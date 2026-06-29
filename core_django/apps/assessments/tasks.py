@@ -171,7 +171,7 @@ def process_refund_task(task_id, rate_limit_user_id):
 # ── Celery Task ───────────────────────────────────────────────
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=5)
-def process_audio_task(self, assessment_id, file_path, target_text='', language='en', user_id=None, rate_limit_user_id=None):
+def process_audio_task(self, assessment_id, file_path, target_text='', language='en', user_id=None, rate_limit_user_id=None, duration_limit=30):
     """
     Reads an audio file from local path and sends it to the appropriate AI service.
     Routes based on `language`:
@@ -231,6 +231,58 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
         # ── Pre-validation of file ──
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Audio file not found at {file_path}")
+
+        # ── Duration check using ffprobe ──
+        import subprocess
+        duration = 0
+        has_error = False
+        error_msg = ''
+        try:
+            cmd = [
+                'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1', file_path
+            ]
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+            if result.returncode == 0:
+                duration = float(result.stdout.strip())
+                if duration > duration_limit:
+                    has_error = True
+                    error_msg = f'Thời lượng tệp ghi âm vượt quá giới hạn tối đa cho phép cho gói của bạn ({duration_limit} giây).'
+            else:
+                has_error = True
+                error_msg = 'Tệp âm thanh không hợp lệ hoặc không thể phân tích.'
+        except subprocess.TimeoutExpired:
+            has_error = True
+            error_msg = 'Quá thời gian phân tích thời lượng tệp ghi âm (Metadata Timeout).'
+        except Exception as e:
+            has_error = True
+            error_msg = f'Lỗi phân tích cấu pháp tệp tin: {str(e)}'
+
+        if has_error:
+            # Clean up files & Refund
+            try:
+                if task.audio_file and os.path.exists(task.audio_file.path):
+                    task.audio_file.delete()
+            except Exception:
+                pass
+            refund_volume_limit(rate_limit_user_id, file_size)
+            
+            task.status = 'FAILED'
+            task.error_message = error_msg
+            task.save(update_fields=['status', 'error_message'])
+            
+            # Notify failure
+            ws_notify(
+                user_id=user_id,
+                event_type='score_failed',
+                title='Chấm điểm thất bại',
+                payload={
+                    'task_id': str(assessment_id),
+                    'error': error_msg,
+                    'language': language,
+                },
+            )
+            return {"error": error_msg, "status": "failed", "reason": "invalid_audio"}
 
         # Determine the AI service URL based on language
         ai_service_url = AI_SERVICE_URLS.get(language)
@@ -352,6 +404,8 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
                 'task_id': str(assessment_id),
                 'score': task.score,
                 'language': language,
+                'result_data': score_data,
+                'target_text': target_text,
             },
         )
 

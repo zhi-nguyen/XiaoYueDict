@@ -35,11 +35,11 @@ services:
     networks:
       - xiaoyue-network
 
-  # ── Message Broker & Result Backend ──
   redis:
     image: redis:alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD:-xiaoyue_redis_secret}
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-xiaoyue_redis_secret}", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -55,7 +55,7 @@ services:
       redis:
         condition: service_healthy
     environment:
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${REDIS_URL:-redis://:xiaoyue_redis_secret@redis:6379/0}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
     env_file:
       - .env
@@ -99,8 +99,8 @@ services:
         condition: service_healthy
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://:xiaoyue_redis_secret@redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://:xiaoyue_redis_secret@redis:6379/0}
       - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL}
       - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL}
     env_file:
@@ -127,8 +127,8 @@ services:
         condition: service_started
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://:xiaoyue_redis_secret@redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://:xiaoyue_redis_secret@redis:6379/0}
     env_file:
       - .env
     volumes:
@@ -152,8 +152,8 @@ services:
         condition: service_started
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://:xiaoyue_redis_secret@redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://:xiaoyue_redis_secret@redis:6379/0}
     env_file:
       - .env
     volumes:
@@ -175,8 +175,8 @@ services:
         condition: service_started
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://:xiaoyue_redis_secret@redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://:xiaoyue_redis_secret@redis:6379/0}
       - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL}
       - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL}
     env_file:
@@ -202,8 +202,8 @@ services:
         condition: service_started
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://:xiaoyue_redis_secret@redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://:xiaoyue_redis_secret@redis:6379/0}
       - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL}
       - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL}
     env_file:
@@ -229,8 +229,8 @@ services:
         condition: service_started
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://:xiaoyue_redis_secret@redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://:xiaoyue_redis_secret@redis:6379/0}
       - AI_SERVICE_EN_URL=${AI_SERVICE_EN_URL}
       - AI_SERVICE_ZH_URL=${AI_SERVICE_ZH_URL}
     env_file:

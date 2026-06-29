@@ -85,9 +85,12 @@ class StudyHistoryLogView(views.APIView):
 
         return Response(StudyHistorySerializer(history).data, status=status.HTTP_200_OK)
 
+from apps.dictionary_zh.views import StandardResultsSetPagination
+
 class ActivityHistoryView(generics.ListAPIView):
     serializer_class = DailyActivitySerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
         return DailyActivity.objects.filter(user=self.request.user).order_by('-activity_date')

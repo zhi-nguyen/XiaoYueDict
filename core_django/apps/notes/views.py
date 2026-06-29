@@ -90,16 +90,22 @@ class NotebookDetailView(APIView):
 
 # ─── Word Views ─────────────────────────────────────────────────
 
+class WordPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 class WordListCreateView(APIView):
     """
-    GET  /api/v1/notes/notebooks/<id>/words/    → Danh sách từ trong sổ
+    GET  /api/v1/notes/notebooks/<id>/words/    → Danh sách từ trong sổ (phân trang)
     POST /api/v1/notes/notebooks/<id>/words/    → Thêm từ vào sổ
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request, notebook_id):
         notebook = get_object_or_404(Notebook, pk=notebook_id, user=request.user)
-        words = notebook.words.all()
+        words = notebook.words.all().order_by('-created_at')
 
         # Tìm kiếm theo từ vựng hoặc nghĩa
         search = request.query_params.get('search', '').strip()
@@ -109,6 +115,12 @@ class WordListCreateView(APIView):
                 | Q(pinyin__icontains=search)
                 | Q(meaning__icontains=search)
             )
+
+        paginator = WordPagination()
+        page = paginator.paginate_queryset(words, request)
+        if page is not None:
+            serializer = WordSerializer(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
 
         serializer = WordSerializer(words, many=True)
         return Response(serializer.data)
@@ -228,16 +240,21 @@ class NotebookExportPDFView(APIView):
     def _handle_export(self, request, notebook_id):
         # 1. Xác thực và truy vấn dữ liệu từ vựng thuộc sổ tay
         notebook = get_object_or_404(Notebook, pk=notebook_id, user=request.user)
+        if notebook.lang == 'en':
+            return Response(
+                {"detail": "Tính năng xuất PDF hiện chỉ hỗ trợ sổ tay tiếng Trung."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         words = notebook.words.all().order_by('-created_at')
 
         # Hỗ trợ xuất tùy chọn một vài từ vựng được chọn
         word_ids_str = request.data.get('word_ids', request.query_params.get('word_ids', ''))
         if word_ids_str:
             try:
-                word_ids = [int(x.strip()) for x in word_ids_str.split(',') if x.strip()]
+                word_ids = [x.strip() for x in word_ids_str.split(',') if x.strip()]
                 if word_ids:
                     words = words.filter(id__in=word_ids)
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
 
         # 2. Kiểm tra gói cước (Tier) và giới hạn
@@ -363,8 +380,8 @@ class NotebookExportPDFView(APIView):
         generate_pdf_task.apply_async(
             args=[
                 str(task.id),
-                notebook.id,
-                request.user.id,
+                str(notebook.id),
+                str(request.user.id),
                 words_data,
                 safe_options,
                 cache_key
@@ -458,6 +475,15 @@ class PDFExportDownloadView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
+        # Expiration Check (1 hour lifecycle)
+        from django.utils import timezone
+        from datetime import timedelta
+        if timezone.now() > task.created_at + timedelta(hours=1):
+            return Response(
+                {'detail': 'Liên kết tải PDF đã hết hạn (quá 1 giờ). Vui lòng xuất lại.'},
+                status=status.HTTP_410_GONE
+            )
+
         if task.status != 'COMPLETED' or not task.pdf_file:
             return Response(
                 {'detail': 'Tệp PDF chưa hoàn thành hoặc tác vụ kết xuất thất bại.'},
@@ -536,7 +562,9 @@ class SystemNotebookListView(APIView):
         cache_key = f"system_notebooks_list_v2_{lang}"
         cached_data = cache.get(cache_key)
         if cached_data is not None:
-            return Response(cached_data)
+            response = Response(cached_data)
+            response['Cache-Control'] = 'public, max-age=86400, s-maxage=86400'
+            return response
         
         if lang == 'en':
             # 1. Fetch CEFR counts
@@ -643,7 +671,9 @@ class SystemNotebookListView(APIView):
             }
             
         cache.set(cache_key, res_data, 60 * 60 * 24)
-        return Response(res_data)
+        response = Response(res_data)
+        response['Cache-Control'] = 'public, max-age=86400, s-maxage=86400'
+        return response
 
 
 class SystemNotebookPagination(PageNumberPagination):
@@ -660,6 +690,29 @@ class SystemNotebookWordsView(generics.ListAPIView):
     - POS & Tag: chỉ Premium/Pro user được xem.
     """
     pagination_class = SystemNotebookPagination
+
+    def list(self, request, *args, **kwargs):
+        key = self.kwargs.get('key', '')
+        lang = self.request.query_params.get('lang', 'zh')
+        page = self.request.query_params.get('page', '1')
+
+        cache_key = f"system_notebook:words:{key}:{lang}:{page}"
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            response = Response(cached_data)
+        else:
+            response = super().list(request, *args, **kwargs)
+            if response.status_code == 200:
+                import random
+                ttl = 24 * 3600 + random.randint(0, 1800)
+                cache.set(cache_key, response.data, timeout=ttl)
+
+        if key.startswith('hsk_') or key.startswith('cefr_'):
+            response['Cache-Control'] = 'public, max-age=86400, s-maxage=86400'
+        else:
+            response['Cache-Control'] = 'private, no-store, no-cache, must-revalidate'
+
+        return response
 
     def get_serializer_class(self):
         key = self.kwargs.get('key', '')

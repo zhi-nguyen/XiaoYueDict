@@ -234,7 +234,8 @@ class FirebaseLoginView(APIView):
             email = decoded_token.get('email')
             name = decoded_token.get('name', '') or ''
         except Exception as e:
-            return Response({"detail": f"Token không hợp lệ: {str(e)}"}, status=401)
+            logger.error(f"Firebase token verification failed: {e}")
+            return Response({"detail": "Token không hợp lệ hoặc đã hết hạn."}, status=401)
 
         User = get_user_model()
         user = None
@@ -292,20 +293,17 @@ class FirebaseLoginView(APIView):
                 user.first_name = name
             user.save()
 
-        # Sync profile picture from Google/Firebase if the user doesn't have an avatar yet
+        # Sync profile picture from Google/Firebase asynchronously via Celery
         picture_url = decoded_token.get('picture')
         if picture_url and not user.avatar:
-            import requests
-            from django.core.files.base import ContentFile
-            try:
-                avatar_response = requests.get(picture_url, timeout=10)
-                if avatar_response.status_code == 200:
-                    filename = f"avatar_{uid}.jpg"
-                    user.avatar.save(filename, ContentFile(avatar_response.content), save=True)
-            except Exception as avatar_err:
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.error(f"Failed to sync Firebase avatar: {avatar_err}")
+            from django.db import transaction
+            from .tasks import sync_firebase_avatar_task
+
+            # Gọi bất đồng bộ sau khi commit transaction thành công để tránh lỗi Race Condition
+            transaction.on_commit(
+                lambda: sync_firebase_avatar_task.delay(user.id, picture_url)
+            )
+
 
         # Generate SimpleJWT tokens
         from rest_framework_simplejwt.tokens import RefreshToken

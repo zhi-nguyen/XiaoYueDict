@@ -21,13 +21,22 @@ class WordCreateSerializer(serializers.ModelSerializer):
 
 class NotebookListSerializer(serializers.ModelSerializer):
     """Danh sách sổ tay — kèm số từ."""
-    word_count = serializers.IntegerField(read_only=True, source='words.count')
-    word_count_annotated = serializers.IntegerField(read_only=True, source='words.count')
+    word_count = serializers.SerializerMethodField()
+    word_count_annotated = serializers.SerializerMethodField()
 
     class Meta:
         model = Notebook
         fields = ['id', 'name', 'description', 'lang', 'word_count', 'word_count_annotated', 'created_at', 'updated_at']
         read_only_fields = ['id', 'word_count', 'word_count_annotated', 'created_at', 'updated_at']
+
+    def get_word_count(self, obj):
+        # If annotated, use the annotated count, otherwise run database count
+        val = getattr(obj, 'word_count_annotated', None)
+        return val if val is not None else obj.words.count()
+
+    def get_word_count_annotated(self, obj):
+        val = getattr(obj, 'word_count_annotated', None)
+        return val if val is not None else obj.words.count()
 
 
 class NotebookDetailSerializer(serializers.ModelSerializer):

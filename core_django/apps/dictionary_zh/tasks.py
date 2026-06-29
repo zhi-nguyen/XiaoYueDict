@@ -20,7 +20,8 @@ def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi'):
                 user_id=user_id,
                 event_type='translation_failed',
                 title='Dịch thuật thất bại',
-                payload={'task_id': self.request.id, 'error': result['error']}
+                payload={'task_id': self.request.id, 'error': result['error']},
+                persist=False,
             )
         return result
 
@@ -41,7 +42,8 @@ def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi'):
                     user_id=user_id,
                     event_type='translation_complete',
                     title='Dịch thuật hoàn tất',
-                    payload={'task_id': self.request.id, **result}
+                    payload={'task_id': self.request.id, **result},
+                    persist=False,
                 )
             return result
 
@@ -60,7 +62,8 @@ def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi'):
                     user_id=user_id,
                     event_type='translation_complete',
                     title='Dịch thuật hoàn tất',
-                    payload={'task_id': self.request.id, **result}
+                    payload={'task_id': self.request.id, **result},
+                    persist=False,
                 )
             return result
 
@@ -97,19 +100,22 @@ def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi'):
             
         if translated_text:
             from django.core.cache import cache
+            import hashlib
+            hashed_text = hashlib.md5(text_input.encode('utf-8')).hexdigest()
             result_data = {
                 'translatedText': translated_text,
                 'source': 'ai_translation',
                 'status': 'SUCCESS'
             }
             # Lưu trữ kết quả AI dịch thuật thành công dài hạn (7 ngày) chống lặp cuộc gọi LLM
-            cache.set(f"ai_trans:{direction}:{text_input}", {"status": "success", "result": result_data}, timeout=7 * 24 * 60 * 60)
+            cache.set(f"ai_trans:{direction}:{hashed_text}", {"status": "success", "result": result_data}, timeout=7 * 24 * 60 * 60)
             if user_id:
                 ws_notify(
                     user_id=user_id,
                     event_type='translation_complete',
                     title='Dịch thuật hoàn tất',
-                    payload={'task_id': self.request.id, **result_data}
+                    payload={'task_id': self.request.id, **result_data},
+                    persist=False,
                 )
             return result_data
         else:
@@ -128,6 +134,7 @@ def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi'):
                 user_id=user_id,
                 event_type='translation_failed',
                 title='Dịch thuật thất bại',
-                payload={'task_id': self.request.id, 'error': result['error']}
+                payload={'task_id': self.request.id, 'error': result['error']},
+                persist=False,
             )
         return result
