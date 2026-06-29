@@ -87,19 +87,25 @@ class SePayPaymentService:
         return order
 
     @staticmethod
-    def verify_webhook_signature(payload_body: bytes, signature: str) -> bool:
+    def verify_webhook_signature(payload_body: bytes, signature: str, timestamp: str = None) -> bool:
         """
         Xác thực chữ ký HMAC-SHA256 từ SePay.
         SePay gửi signature trong header, ta cần so khớp với hash tính từ body + secret.
+        Nếu có timestamp, SePay ký theo định dạng: {timestamp}.{payload_body}
         """
         secret = get_sepay_webhook_secret()
         if not secret:
             logger.error("SEPAY_WEBHOOK_SECRET is not configured!")
             return False
 
+        if timestamp:
+            msg = f"{timestamp}.".encode('utf-8') + payload_body
+        else:
+            msg = payload_body
+
         expected = hmac.new(
             secret.encode('utf-8'),
-            payload_body,
+            msg,
             hashlib.sha256
         ).hexdigest()
 

@@ -133,9 +133,10 @@ class SePayWebhookView(APIView):
         elif signature.startswith('Hmac '):
             signature = signature[5:]
 
+        timestamp = request.headers.get('X-SePay-Timestamp')
         payment_service = SePayPaymentService()
 
-        if not payment_service.verify_webhook_signature(request.body, signature):
+        if not payment_service.verify_webhook_signature(request.body, signature, timestamp=timestamp):
             logger.warning("SePay webhook signature verification failed!")
             return Response(
                 {'success': False, 'message': 'Invalid signature'},
