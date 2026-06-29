@@ -404,6 +404,8 @@ def process_audio_task(self, assessment_id, file_path, target_text='', language=
                 'task_id': str(assessment_id),
                 'score': task.score,
                 'language': language,
+                'result_data': score_data,
+                'target_text': target_text,
             },
         )
 

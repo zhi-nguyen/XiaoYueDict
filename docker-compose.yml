@@ -253,6 +253,8 @@ services:
   ai-service-zh:
     build:
       context: ./ai_service_zh
+    ports:
+      - "8001:8001"
     volumes:
       - ./ai_service_zh/models_cache:/app/models_cache
     healthcheck:
@@ -279,6 +281,8 @@ services:
   ai-service-en:
     build:
       context: ./ai_service_en
+    ports:
+      - "8000:8000"
     volumes:
       - ./ai_service_en/model:/app/model
     environment:

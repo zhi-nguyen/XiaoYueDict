@@ -69,3 +69,40 @@ class UnreadCountView(APIView):
             is_read=False,
         ).count()
         return Response({'unread_count': count}, status=status.HTTP_200_OK)
+
+
+from rest_framework.pagination import PageNumberPagination
+
+
+class NotificationPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class NotificationListView(APIView):
+    """
+    GET /api/v1/notifications/
+    Returns a paginated list of all notifications for the user (both read and unread).
+    Query params:
+        - page: Page number (default: 1)
+        - is_read: Filter by read status (true/false, optional)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        notifications = Notification.objects.filter(user=request.user)
+        is_read_filter = request.query_params.get('is_read')
+        if is_read_filter is not None:
+            is_read_bool = is_read_filter.lower() in ('true', '1', 't')
+            notifications = notifications.filter(is_read=is_read_bool)
+
+        paginator = NotificationPagination()
+        page = paginator.paginate_queryset(notifications, request, view=self)
+        if page is not None:
+            serializer = NotificationSerializer(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+        serializer = NotificationSerializer(notifications, many=True)
+        return Response(serializer.data)
+

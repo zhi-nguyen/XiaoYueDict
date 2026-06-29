@@ -20,7 +20,8 @@ def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi'):
                 user_id=user_id,
                 event_type='translation_failed',
                 title='Dịch thuật thất bại',
-                payload={'task_id': self.request.id, 'error': result['error']}
+                payload={'task_id': self.request.id, 'error': result['error']},
+                persist=False,
             )
         return result
 
@@ -41,7 +42,8 @@ def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi'):
                     user_id=user_id,
                     event_type='translation_complete',
                     title='Dịch thuật hoàn tất',
-                    payload={'task_id': self.request.id, **result}
+                    payload={'task_id': self.request.id, **result},
+                    persist=False,
                 )
             return result
 
@@ -60,7 +62,8 @@ def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi'):
                     user_id=user_id,
                     event_type='translation_complete',
                     title='Dịch thuật hoàn tất',
-                    payload={'task_id': self.request.id, **result}
+                    payload={'task_id': self.request.id, **result},
+                    persist=False,
                 )
             return result
 
@@ -109,7 +112,8 @@ def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi'):
                     user_id=user_id,
                     event_type='translation_complete',
                     title='Dịch thuật hoàn tất',
-                    payload={'task_id': self.request.id, **result_data}
+                    payload={'task_id': self.request.id, **result_data},
+                    persist=False,
                 )
             return result_data
         else:
@@ -128,6 +132,7 @@ def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi'):
                 user_id=user_id,
                 event_type='translation_failed',
                 title='Dịch thuật thất bại',
-                payload={'task_id': self.request.id, 'error': result['error']}
+                payload={'task_id': self.request.id, 'error': result['error']},
+                persist=False,
             )
         return result

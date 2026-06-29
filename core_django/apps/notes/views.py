@@ -240,16 +240,21 @@ class NotebookExportPDFView(APIView):
     def _handle_export(self, request, notebook_id):
         # 1. Xác thực và truy vấn dữ liệu từ vựng thuộc sổ tay
         notebook = get_object_or_404(Notebook, pk=notebook_id, user=request.user)
+        if notebook.lang == 'en':
+            return Response(
+                {"detail": "Tính năng xuất PDF hiện chỉ hỗ trợ sổ tay tiếng Trung."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         words = notebook.words.all().order_by('-created_at')
 
         # Hỗ trợ xuất tùy chọn một vài từ vựng được chọn
         word_ids_str = request.data.get('word_ids', request.query_params.get('word_ids', ''))
         if word_ids_str:
             try:
-                word_ids = [int(x.strip()) for x in word_ids_str.split(',') if x.strip()]
+                word_ids = [x.strip() for x in word_ids_str.split(',') if x.strip()]
                 if word_ids:
                     words = words.filter(id__in=word_ids)
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
 
         # 2. Kiểm tra gói cước (Tier) và giới hạn
@@ -375,8 +380,8 @@ class NotebookExportPDFView(APIView):
         generate_pdf_task.apply_async(
             args=[
                 str(task.id),
-                notebook.id,
-                request.user.id,
+                str(notebook.id),
+                str(request.user.id),
                 words_data,
                 safe_options,
                 cache_key
@@ -468,6 +473,15 @@ class PDFExportDownloadView(APIView):
             return Response(
                 {'detail': 'Bạn không có quyền tải file từ tác vụ này.'},
                 status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Expiration Check (1 hour lifecycle)
+        from django.utils import timezone
+        from datetime import timedelta
+        if timezone.now() > task.created_at + timedelta(hours=1):
+            return Response(
+                {'detail': 'Liên kết tải PDF đã hết hạn (quá 1 giờ). Vui lòng xuất lại.'},
+                status=status.HTTP_410_GONE
             )
 
         if task.status != 'COMPLETED' or not task.pdf_file:

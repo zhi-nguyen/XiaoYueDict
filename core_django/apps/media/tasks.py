@@ -99,7 +99,8 @@ def generate_word_image_task(word_id, lang, user_id):
                     user_id=user_id,
                     event_type="image_complete",
                     title="Hình ảnh đã tải xong",
-                    payload={"word_id": word_id, "image_url": image_url}
+                    payload={"word_id": word_id, "image_url": image_url},
+                    persist=False,
                 )
                 logger.info(f"Successfully generated and cached GCS image: {image_url}")
                 return
@@ -115,7 +116,8 @@ def generate_word_image_task(word_id, lang, user_id):
             user_id=user_id,
             event_type="image_failed",
             title="Lỗi tải hình ảnh",
-            payload={"word_id": word_id, "error": str(e)}
+            payload={"word_id": word_id, "error": str(e)},
+            persist=False,
         )
 
 @shared_task

@@ -7,10 +7,18 @@ from django.db.models.functions import Length, StrIndex
 from django.core.cache import cache
 
 from .models import ZhWord, ZhExample
-from .serializers import ZhWordSerializer
+from .serializers import ZhWordSerializer, ZhCharacterBriefSerializer
 from apps.ai_gateway import AIFallbackGateway
 import re
 import jieba
+import unicodedata
+
+def is_chinese_char(c: str) -> bool:
+    """
+    Kiểm tra ký tự truyền vào có thuộc nhóm chữ Hán (CJK Unified Ideograph) hay không,
+    bao gồm cả các dải ký tự mở rộng (Extension A-H).
+    """
+    return 'CJK UNIFIED IDEOGRAPH' in unicodedata.name(c, '')
 
 
 class StandardResultsSetPagination(PageNumberPagination):
@@ -30,7 +38,7 @@ class ZhWordSearchView(generics.ListAPIView):
 
         # Check if fallback is disabled
         fallback_param = request.query_params.get('fallback', 'true').lower() == 'true'
-        is_chinese = bool(re.search(r'[\u4e00-\u9fa5]', query))
+        is_chinese = any(is_chinese_char(c) for c in query)
         q_lower = query.lower()
 
         if fallback_param:
@@ -141,7 +149,7 @@ class ZhWordSearchView(generics.ListAPIView):
             ).order_by('adjusted_rank')
 
         q_lower = cleaned_query.lower()
-        is_chinese = bool(re.search(r'[\u4e00-\u9fa5]', cleaned_query))
+        is_chinese = any(is_chinese_char(c) for c in cleaned_query)
 
         # --- Pre-filtering optimization based on language ---
         if is_chinese:
@@ -162,15 +170,15 @@ class ZhWordSearchView(generics.ListAPIView):
                 filter_q |= Q(id__in=example_word_ids)
 
             # Generate substrings of query for fast word_idx match
-            substrings = []
-            for i in range(len(cleaned_query)):
-                for j in range(i + 2, len(cleaned_query) + 1):
-                    sub = cleaned_query[i:j].strip()
-                    if sub and len(sub) >= 2:
-                        substrings.append(sub)
-            substrings = list(set(substrings))
-            if substrings:
-                filter_q |= Q(word__in=substrings)
+            # substrings = []
+            # for i in range(len(cleaned_query)):
+            #     for j in range(i + 2, len(cleaned_query) + 1):
+            #         sub = cleaned_query[i:j].strip()
+            #         if sub and len(sub) >= 2:
+            #             substrings.append(sub)
+            # substrings = list(set(substrings))
+            # if substrings:
+            #     filter_q |= Q(word__in=substrings)
                 
             queryset = queryset.filter(filter_q)
             has_example_match = Exists(
@@ -311,3 +319,29 @@ class TranslationStatusView(APIView):
             
         # Nếu vẫn đang chạy hoặc nằm trong hàng đợi
         return Response({"status": res.state})
+
+
+class ZhWordBatchSearchView(generics.ListAPIView):
+    serializer_class = ZhCharacterBriefSerializer
+    pagination_class = None
+
+    def list(self, request, *args, **kwargs):
+        query = self.request.query_params.get('q', '').strip()
+        query_type = self.request.query_params.get('type', 'char')
+        
+        if not query:
+            return Response({'results': []})
+            
+        if query_type == 'char':
+            # Tách chữ Hán mở rộng dùng is_chinese_char
+            chars = list(set([c for c in query if is_chinese_char(c)]))
+            if not chars:
+                return Response({'results': []})
+            
+            # Query nhanh không kèm ví dụ để giảm tải DB và payload size
+            queryset = ZhWord.objects.filter(word__in=chars)
+        else:
+            return Response({'error': 'Invalid type parameter'}, status=400)
+            
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({'results': serializer.data})

@@ -11,6 +11,7 @@ import os
 import json
 import logging
 import redis
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,18 @@ def get_redis_client():
     return _redis_client
 
 
-def ws_notify(user_id, event_type: str, title: str, payload: dict = None):
+def _serialize_uuids(data):
+    """Recursively convert UUID objects to their string representation."""
+    if isinstance(data, dict):
+        return {k: _serialize_uuids(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [_serialize_uuids(x) for x in data]
+    elif isinstance(data, uuid.UUID):
+        return str(data)
+    return data
+
+
+def ws_notify(user_id, event_type: str, title: str, payload: dict = None, persist: bool = True, expires_at=None):
     """
     Send a notification to a user via WebSocket.
 
@@ -44,6 +56,8 @@ def ws_notify(user_id, event_type: str, title: str, payload: dict = None):
         event_type: One of the Notification.NOTIFICATION_TYPES values.
         title: Human-readable notification title.
         payload: Additional JSON data for the frontend.
+        persist: Boolean whether to save to DB.
+        expires_at: Expiration datetime for the notification interaction.
     """
     if not user_id:
         return  # No user to notify
@@ -62,25 +76,35 @@ def ws_notify(user_id, event_type: str, title: str, payload: dict = None):
 
     if payload is None:
         payload = {}
+    else:
+        payload = _serialize_uuids(payload)
 
     is_guest = str(user_id).startswith('guest_')
+    notification_id = None
 
     # Step 1: Persist to database (Only for registered users)
-    if not is_guest:
+    if not is_guest and persist:
         try:
             from apps.notifications.models import Notification
-            Notification.objects.create(
+            notification = Notification.objects.create(
                 user_id=user_id,
                 notification_type=event_type,
                 title=title,
                 payload=payload,
+                expires_at=expires_at,
             )
+            notification_id = str(notification.id)
         except Exception as e:
             logger.error(f"Failed to save notification to DB: {e}")
+
+    # Transient ID generation for un-persisted notification events
+    if notification_id is None:
+        notification_id = str(uuid.uuid4())
 
     # Step 2: Publish to Redis Pub/Sub for real-time delivery
     try:
         message = json.dumps({
+            "id": notification_id,
             "user_id": str(user_id),
             "type": event_type,
             "title": title,
