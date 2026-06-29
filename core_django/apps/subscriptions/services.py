@@ -135,35 +135,35 @@ class SePayPaymentService:
             logger.warning(f"Could not extract order code from content: '{content}'")
             return {'success': True, 'message': 'No matching order code found'}
 
-        # Tìm PaymentOrder tương ứng
-        try:
-            order = PaymentOrder.objects.select_for_update().get(order_code=order_code)
-        except PaymentOrder.DoesNotExist:
-            logger.warning(f"PaymentOrder not found for order_code: {order_code}")
-            return {'success': True, 'message': 'Order not found'}
-
-        # Idempotency: nếu đã PAID rồi thì bỏ qua
-        if order.status == 'PAID':
-            logger.info(f"Order {order_code} already paid, ignoring duplicate webhook")
-            return {'success': True, 'message': 'Already processed'}
-
-        # Kiểm tra hết hạn
-        if order.is_expired:
-            logger.warning(f"Order {order_code} has expired")
-            order.status = 'EXPIRED'
-            order.save(update_fields=['status'])
-            return {'success': True, 'message': 'Order expired'}
-
-        # Kiểm tra số tiền khớp
-        if int(amount) < int(order.amount):
-            logger.warning(
-                f"Amount mismatch for order {order_code}: "
-                f"expected={order.amount}, received={amount}"
-            )
-            return {'success': True, 'message': 'Amount mismatch'}
-
-        # ─── Thanh toán hợp lệ → Nâng cấp tier ───
+        # Tìm và xử lý PaymentOrder trong transaction để dùng select_for_update()
         with transaction.atomic():
+            try:
+                order = PaymentOrder.objects.select_for_update().get(order_code=order_code)
+            except PaymentOrder.DoesNotExist:
+                logger.warning(f"PaymentOrder not found for order_code: {order_code}")
+                return {'success': True, 'message': 'Order not found'}
+
+            # Idempotency: nếu đã PAID rồi thì bỏ qua
+            if order.status == 'PAID':
+                logger.info(f"Order {order_code} already paid, ignoring duplicate webhook")
+                return {'success': True, 'message': 'Already processed'}
+
+            # Kiểm tra hết hạn
+            if order.is_expired:
+                logger.warning(f"Order {order_code} has expired")
+                order.status = 'EXPIRED'
+                order.save(update_fields=['status'])
+                return {'success': True, 'message': 'Order expired'}
+
+            # Kiểm tra số tiền khớp
+            if int(amount) < int(order.amount):
+                logger.warning(
+                    f"Amount mismatch for order {order_code}: "
+                    f"expected={order.amount}, received={amount}"
+                )
+                return {'success': True, 'message': 'Amount mismatch'}
+
+            # ─── Thanh toán hợp lệ → Nâng cấp tier ───
             # Cập nhật PaymentOrder
             order.status = 'PAID'
             order.paid_at = timezone.now()
@@ -181,6 +181,7 @@ class SePayPaymentService:
             f"user={order.user.username}, tier={order.target_tier}, amount={amount}"
         )
         return {'success': True, 'message': 'Payment processed successfully'}
+
 
     def generate_qr_data(self, order: PaymentOrder) -> dict:
         """
