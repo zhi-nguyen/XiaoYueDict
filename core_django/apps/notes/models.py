@@ -58,6 +58,7 @@ class Word(models.Model):
     pinyin = models.CharField(max_length=255, blank=True, default='', verbose_name='Bính âm')
     meaning = models.TextField(blank=True, default='', verbose_name='Nghĩa')
     note = models.TextField(blank=True, default='', verbose_name='Ghi chú')
+    is_mastered = models.BooleanField(default=False, verbose_name='Đã thuộc')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

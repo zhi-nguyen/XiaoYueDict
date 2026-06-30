@@ -11,9 +11,13 @@ from .views import (
     PDFExportLimitsView,
     SystemNotebookListView,
     SystemNotebookWordsView,
+    CloneSystemNotebookView,
 )
 
 urlpatterns = [
+    # Clone system notebook
+    path('clone-system-notebook/', CloneSystemNotebookView.as_view(), name='clone_system_notebook'),
+
     # Notebook CRUD
     path('notebooks/', NotebookListCreateView.as_view(), name='notebook_list_create'),
     path('notebooks/<uuid:notebook_id>/', NotebookDetailView.as_view(), name='notebook_detail'),

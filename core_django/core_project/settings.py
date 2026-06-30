@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'apps.assessments',
     'apps.exams',
     'apps.notes',
+    'apps.flashcard_exercises',
     'apps.dictionary_zh',
     'apps.dictionary_en',
     'apps.users',

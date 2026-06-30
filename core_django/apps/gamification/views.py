@@ -42,7 +42,7 @@ class StudyHistoryLogView(views.APIView):
         }
         """
         user = request.user
-        today = timezone.now().date()
+        today = timezone.localdate()
 
         vocab = request.data.get('vocabulary_learned', 0)
         acc = request.data.get('pronunciation_accuracy', 0.0)
@@ -94,3 +94,19 @@ class ActivityHistoryView(generics.ListAPIView):
 
     def get_queryset(self):
         return DailyActivity.objects.filter(user=self.request.user).order_by('-activity_date')
+
+
+class GamificationDashboardView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        streak, _ = UserStreak.objects.get_or_create(user=user)
+        target, _ = DailyTarget.objects.get_or_create(user=user)
+        history = StudyHistory.objects.filter(user=user).order_by('-study_date')
+
+        return Response({
+            'streak': UserStreakSerializer(streak).data,
+            'target': DailyTargetSerializer(target).data,
+            'history': StudyHistorySerializer(history, many=True).data
+        }, status=status.HTTP_200_OK)

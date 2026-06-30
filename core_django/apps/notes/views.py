@@ -116,6 +116,13 @@ class WordListCreateView(APIView):
                 | Q(meaning__icontains=search)
             )
 
+        # Lọc theo trạng thái đã thuộc / chưa thuộc
+        mastered = request.query_params.get('mastered', '').strip().lower()
+        if mastered == 'true':
+            words = words.filter(is_mastered=True)
+        elif mastered == 'false':
+            words = words.filter(is_mastered=False)
+
         paginator = WordPagination()
         page = paginator.paginate_queryset(words, request)
         if page is not None:
@@ -170,9 +177,40 @@ class WordDetailView(APIView):
 
     def patch(self, request, notebook_id, word_id):
         word = self._get_word(request.user, notebook_id, word_id)
+        was_mastered = word.is_mastered
         serializer = WordCreateSerializer(word, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+
+        # Check if is_mastered changed from False to True to update gamification profile
+        if not was_mastered and word.is_mastered:
+            try:
+                from apps.gamification.models import StudyHistory, DailyTarget, DailyActivity
+                from django.utils import timezone
+                
+                today = timezone.localdate()
+                history, created = StudyHistory.objects.get_or_create(user=request.user, study_date=today)
+                history.vocabulary_learned += 1
+                history.save()
+                
+                # Check if this meets daily target
+                target, _ = DailyTarget.objects.get_or_create(user=request.user)
+                is_met = False
+                if target.target_type == 'words' and history.vocabulary_learned >= target.target_words:
+                    is_met = True
+                elif target.target_type == 'duration' and history.study_duration_seconds >= (target.target_duration * 60):
+                    is_met = True
+                
+                if is_met:
+                    activity, created_act = DailyActivity.objects.get_or_create(user=request.user, activity_date=today)
+                    if not activity.is_target_met:
+                        activity.is_target_met = True
+                        activity.save()
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error updating gamification profile on word master: {e}")
+
         return Response(WordSerializer(word).data)
 
     def delete(self, request, notebook_id, word_id):
@@ -314,10 +352,14 @@ class NotebookExportPDFView(APIView):
         # 3. Định dạng dữ liệu payload cho microservice
         words_data = []
         for w in words:
+            meaning = w.meaning or ""
+            if meaning.strip():
+                m_trimmed = meaning.strip()
+                meaning = m_trimmed[0].upper() + m_trimmed[1:]
             words_data.append({
                 "vocabulary": w.vocabulary,
                 "pinyin": w.pinyin or "",
-                "meaning": w.meaning or "",
+                "meaning": meaning,
                 "note": w.note or ""
             })
 
@@ -754,3 +796,104 @@ class SystemNotebookWordsView(generics.ListAPIView):
         raise Http404("Danh mục sổ tay hệ thống không tồn tại.")
 
 
+class CloneSystemNotebookView(APIView):
+    """
+    POST /api/v1/notes/clone-system-notebook/
+    Body: { "system_notebook_key": "hsk_1", "lang": "zh" }
+    Clone all words in a system notebook to a personal notebook.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        key = request.data.get('system_notebook_key', '').strip()
+        lang = request.data.get('lang', 'zh').strip()
+
+        if not key:
+            return Response({"detail": "system_notebook_key is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Retrieve system words
+        if key.startswith('cefr_') or (key.startswith('pos_') and lang == 'en'):
+            queryset = EnWord.objects.all()
+            if key.startswith('cefr_'):
+                cefr_level = key.replace('cefr_', '').upper()
+                queryset = queryset.filter(cefr_level=cefr_level).order_by('word')
+            elif key.startswith('pos_'):
+                pos_type = key.replace('pos_', '')
+                queryset = queryset.filter(part_of_speech__contains=pos_type).order_by('word')
+        else:
+            queryset = ZhWord.objects.all()
+            if key.startswith('hsk_'):
+                hsk_level = key.replace('hsk_', '')
+                queryset = queryset.filter(hsk_level=hsk_level).order_by('popularity_rank', 'id')
+            elif key.startswith('pos_'):
+                pos_type = key.replace('pos_', '')
+                queryset = queryset.filter(part_of_speech__contains=pos_type).order_by('popularity_rank', 'id')
+            elif key.startswith('tag_'):
+                tag_name = key.replace('tag_', '')
+                queryset = queryset.filter(tags__contains=tag_name).order_by('popularity_rank', 'id')
+            else:
+                raise Http404("Danh mục sổ tay hệ thống không tồn tại.")
+
+        if not queryset.exists():
+            return Response({"detail": "Sổ tay hệ thống trống hoặc không tìm thấy từ vựng."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Resolve notebook name
+        if lang == 'en':
+            if key.startswith('cefr_'):
+                notebook_name = f"Từ vựng CEFR {key.replace('cefr_', '').upper()}"
+            else:
+                notebook_name = f"Từ loại {key.replace('pos_', '').capitalize()}"
+        else:
+            if key.startswith('hsk_'):
+                notebook_name = f"Từ vựng HSK {key.replace('hsk_', '')}"
+            elif key.startswith('pos_'):
+                pos_map = {
+                    "noun": "Danh từ", "verb": "Động từ", "adjective": "Tính từ",
+                    "adverb": "Phó từ", "idiom": "Thành ngữ", "classifier": "Lượng từ",
+                    "conjunction": "Liên từ", "preposition": "Giới từ", "pronoun": "Đại từ"
+                }
+                sub = key.replace('pos_', '')
+                notebook_name = f"Từ loại {pos_map.get(sub, sub.capitalize())}"
+            elif key.startswith('tag_'):
+                tag_map = {
+                    "人": "Con người", "实体": "Thực thể", "动物": "Động vật",
+                    "商业": "Thương mại", "职位": "Nghề nghiệp", "事件": "Sự kiện",
+                    "政": "Chính trị", "生理学": "Sinh lý học", "群体": "Nhóm người",
+                    "家庭": "Gia đình", "物质": "Vật chất", "医": "Y tế",
+                    "教育": "Giáo dục", "金融": "Tài chính", "体育": "Thể thao"
+                }
+                sub = key.replace('tag_', '')
+                notebook_name = f"Chủ đề {tag_map.get(sub, sub)}"
+            else:
+                notebook_name = "Sổ tay sao chép"
+
+        # Create new Notebook
+        notebook = Notebook.objects.create(
+            user=request.user,
+            name=f"{notebook_name} (Sổ cá nhân)",
+            description=f"Sao chép từ sổ tay hệ thống {notebook_name}",
+            lang=lang
+        )
+
+        # Bulk create Word objects
+        words_to_create = []
+        for item in queryset:
+            vocab = getattr(item, 'word', '') or getattr(item, 'vocabulary', '')
+            pinyin = getattr(item, 'pinyin', '') or getattr(item, 'ipa', '')
+            meaning = getattr(item, 'translation_vi', '') or getattr(item, 'meaning', '')
+            
+            words_to_create.append(Word(
+                notebook=notebook,
+                vocabulary=vocab,
+                pinyin=pinyin,
+                meaning=meaning,
+                note=''
+            ))
+
+        Word.objects.bulk_create(words_to_create, batch_size=500)
+
+        # Return serialized notebook
+        return Response(
+            NotebookListSerializer(notebook).data,
+            status=status.HTTP_201_CREATED
+        )

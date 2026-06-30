@@ -7,7 +7,7 @@ class WordSerializer(serializers.ModelSerializer):
         model = Word
         fields = [
             'id', 'notebook', 'vocabulary', 'pinyin',
-            'meaning', 'note', 'created_at', 'updated_at',
+            'meaning', 'note', 'is_mastered', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -16,7 +16,7 @@ class WordCreateSerializer(serializers.ModelSerializer):
     """Serializer dùng khi thêm từ vào sổ (notebook được lấy từ URL)."""
     class Meta:
         model = Word
-        fields = ['vocabulary', 'pinyin', 'meaning', 'note']
+        fields = ['vocabulary', 'pinyin', 'meaning', 'note', 'is_mastered']
 
 
 class NotebookListSerializer(serializers.ModelSerializer):
