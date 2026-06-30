@@ -40,7 +40,8 @@ def generate_tts_audio_task(self, task_id, user_id, text, voice, cache_key):
                 'task_id': task_id,
                 'audio_url': audio_url,
                 'text': text
-            }
+            },
+            persist=False,
         )
         return {"status": "success", "audio_url": audio_url}
 
@@ -53,6 +54,7 @@ def generate_tts_audio_task(self, task_id, user_id, text, voice, cache_key):
             payload={
                 'task_id': task_id,
                 'error': str(exc)
-            }
+            },
+            persist=False,
         )
         raise self.retry(exc=exc)

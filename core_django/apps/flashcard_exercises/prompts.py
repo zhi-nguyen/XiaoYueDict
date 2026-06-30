@@ -37,7 +37,9 @@ Bạn phải trả về một đối tượng JSON hợp lệ duy nhất chứa 
 Chú ý quan trọng:
 - Đảm bảo JSON hoàn toàn hợp lệ, có thể parse bằng `json.loads` trong Python.
 - Từ vựng mục tiêu phải xuất hiện trong câu của phần đọc và nghe.
-- Các lựa chọn sai phải gần gũi, hợp lý nhưng không đúng ngữ cảnh.
+- Thiết kế các lựa chọn sai (distractors) cực kỳ lắc léo, thông minh và có độ gây nhiễu cao để thử thách người học thực sự:
+  + Đối với phần Đọc (reading): Các lựa chọn sai phải có CÙNG từ loại, nằm trong CÙNG trường từ vựng/nhóm nghĩa rất gần gũi với từ mục tiêu (ví dụ: cùng là món ăn dạng sợi như miến, phở, bánh canh khi từ mục tiêu là "mì sợi"; hoặc các nét nghĩa khác của các bộ thủ ghép chữ như "bột mì" cho chữ "面"). Tuyệt đối không đưa ra các đáp án sai quá lộ liễu và dễ loại trừ (như cơm, trà, nước ngọt).
+  + Đối với phần Nghe (listening): Các câu lựa chọn dịch nghĩa sai phải được viết giống câu dịch đúng đến 85% - 90%, chỉ được phép thay đổi một chi tiết rất nhỏ (như thay đổi đại từ nhân xưng bạn thành họ, thay đổi động từ hành động gần nghĩa, hoặc thay đổi chính từ vựng mục tiêu bằng từ gây nhiễu gần nghĩa ở trên). Ví dụ: Câu đúng là "Bạn có thích ăn mì sợi không?", thì các câu sai nên là "Bạn có thích làm mì sợi không?", "Bạn có thích ăn miến không?", "Họ có thích ăn mì sợi không?".
 - Ngôn ngữ dịch nghĩa và giải thích là tiếng Việt.
 - Tuyệt đối chỉ sinh câu hỏi, câu trả lời bằng {target_lang} cho phần câu hỏi, và tiếng Việt cho phần lựa chọn nghĩa/giải thích.
 - Hãy đa dạng hóa tối đa chủ đề, ngữ cảnh (như sinh hoạt thường ngày, công sở, thương mại, du lịch, khoa học, học thuật) và cấu trúc câu. Tránh sử dụng cùng một cấu trúc ngữ pháp hoặc văn phong lặp đi lặp lại. Tạo tính ngẫu nhiên, sáng tạo và thú vị cao nhất cho mỗi lần sinh.
