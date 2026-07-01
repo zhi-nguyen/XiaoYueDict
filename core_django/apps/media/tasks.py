@@ -89,7 +89,7 @@ def _resolve_image_prompt(word_id, lang, word):
 
 
 @shared_task
-def generate_word_image_task(word_id, lang, user_id):
+def generate_word_image_task(word_id, lang, user_id, **kwargs):
     logger.info(f"Celery task: generating image for word_id={word_id}, lang={lang}, user={user_id}")
     word = get_word_by_id(word_id, lang)
     redis_key = f"img:{lang}:{word_id}"
@@ -147,7 +147,7 @@ def generate_word_image_task(word_id, lang, user_id):
         )
 
 @shared_task
-def trigger_image_regeneration_task(word_id, lang, user_id):
+def trigger_image_regeneration_task(word_id, lang, user_id, **kwargs):
     logger.info(f"Celery task: regenerating image for word_id={word_id}, lang={lang}, user={user_id}")
     word = get_word_by_id(word_id, lang)
     if not word:

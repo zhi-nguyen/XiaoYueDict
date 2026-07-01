@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=10)
-def generate_pdf_task(self, task_id, notebook_id, user_id, words_data, safe_options, rate_limit_key):
+def generate_pdf_task(self, task_id, notebook_id, user_id, words_data, safe_options, rate_limit_key, **kwargs):
     logger.info(f"Starting PDF generation task: {task_id}")
     
     try:

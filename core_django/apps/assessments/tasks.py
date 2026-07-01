@@ -171,7 +171,7 @@ def process_refund_task(task_id, rate_limit_user_id):
 # ── Celery Task ───────────────────────────────────────────────
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=5)
-def process_audio_task(self, assessment_id, file_path, target_text='', language='en', user_id=None, rate_limit_user_id=None, duration_limit=30):
+def process_audio_task(self, assessment_id, file_path, target_text='', language='en', user_id=None, rate_limit_user_id=None, duration_limit=30, **kwargs):
     """
     Reads an audio file from local path and sends it to the appropriate AI service.
     Routes based on `language`:

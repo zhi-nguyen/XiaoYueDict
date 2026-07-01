@@ -88,7 +88,7 @@ WSGI_APPLICATION = 'core_project.wsgi.application'
 DATABASES = {
     'default': dj_database_url.config(
         default=f'sqlite:///{BASE_DIR / "db.sqlite3"}',
-        conn_max_age=600,
+        conn_max_age=60,
     )
 }
 
@@ -161,6 +161,9 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh'
 CELERY_TASK_DEFAULT_QUEUE = 'queue_core'
+CELERY_TASK_ROUTERS = (
+    'core_project.routers.UserTierRouter',
+)
 
 from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
@@ -202,7 +205,8 @@ REST_FRAMEWORK = {
     },
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'core_project.authentication.CookieJWTAuthentication',
-    )
+    ),
+    'EXCEPTION_HANDLER': 'core_project.exceptions.custom_exception_handler',
 }
 
 from datetime import timedelta

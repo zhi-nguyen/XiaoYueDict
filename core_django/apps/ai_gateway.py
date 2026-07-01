@@ -129,10 +129,18 @@ class AIFallbackGateway:
                     "WebSocket notification will NOT be sent."
                 )
 
+            # Determine user tier for SLA routing
+            if user and user.is_authenticated:
+                user_tier = getattr(user.subscription, 'tier', 'Free') if hasattr(user, 'subscription') else 'Free'
+            else:
+                user_tier = 'Guest'
+
+            task_kwargs = {"user_id": effective_user_id} if effective_user_id else {}
+            task_kwargs["user_tier"] = user_tier
+
             task = task_func.apply_async(
                 args=[query], 
-                kwargs={"user_id": effective_user_id} if effective_user_id else {},
-                queue='queue_core'
+                kwargs=task_kwargs
             )
 
             # Thiết lập trạng thái xử lý ngầm (chống Cache Stampede)
@@ -239,13 +247,21 @@ class AIFallbackGateway:
                 "WebSocket notification will NOT be sent."
             )
 
+        # Determine user tier for SLA routing
+        if user and user.is_authenticated:
+            user_tier = getattr(user.subscription, 'tier', 'Free') if hasattr(user, 'subscription') else 'Free'
+        else:
+            user_tier = 'Guest'
+
+        task_kwargs = {
+            "user_id": effective_user_id,
+            "direction": direction
+        } if effective_user_id else {"direction": direction}
+        task_kwargs["user_tier"] = user_tier
+
         task = task_func.apply_async(
             args=[text_input], 
-            kwargs={
-                "user_id": effective_user_id,
-                "direction": direction
-            } if effective_user_id else {"direction": direction},
-            queue='queue_core'
+            kwargs=task_kwargs
         )
         cache.set(ai_cache_key, {"status": "processing", "task_id": task.id}, timeout=5 * 60)
         

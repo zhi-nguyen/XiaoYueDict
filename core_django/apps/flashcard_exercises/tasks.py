@@ -58,7 +58,7 @@ def call_tts_service(text, lang):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
-def generate_exercises_task(self, word, lang, user_id=None):
+def generate_exercises_task(self, word, lang, user_id=None, **kwargs):
     logger.info(f"Starting exercise generation task for: {word} ({lang})")
     
     # 1. Fetch all existing exercises from DB
@@ -217,7 +217,7 @@ def generate_exercises_task(self, word, lang, user_id=None):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
-def check_writing_task(self, sentence, target_word, lang, user_id=None):
+def check_writing_task(self, sentence, target_word, lang, user_id=None, **kwargs):
     logger.info(f"Starting writing grammar check task for word: {target_word}")
     
     try:

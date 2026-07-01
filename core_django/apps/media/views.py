@@ -59,9 +59,10 @@ class GetWordImageView(APIView):
         cache.set(redis_key, {"status": "GENERATING"}, timeout=300)
 
         # Trigger Celery Task in the correct queue
+        user_tier = getattr(request.user.subscription, 'tier', 'Free') if request.user.is_authenticated and hasattr(request.user, 'subscription') else 'Free'
         generate_word_image_task.apply_async(
             args=[str(word_id), lang, user_id],
-            queue='queue_core'
+            kwargs={'user_tier': user_tier}
         )
         
         return Response({"status": "GENERATING"}, status=202)
@@ -120,9 +121,10 @@ class ReportInvalidImageView(APIView):
 
         # Đẩy tác vụ xử lý bất đồng bộ vào Celery để xóa file cũ và gọi API tái tạo ảnh mới
         user_id = str(request.user.id)
+        user_tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
         trigger_image_regeneration_task.apply_async(
             args=[str(word_id), lang, user_id],
-            queue='queue_core'
+            kwargs={'user_tier': user_tier}
         )
         
         return Response({"detail": "Hình ảnh đang được hệ thống xử lý tái tạo bất đồng bộ."}, status=202)

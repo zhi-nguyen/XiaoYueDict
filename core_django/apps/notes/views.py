@@ -123,6 +123,12 @@ class WordListCreateView(APIView):
         elif mastered == 'false':
             words = words.filter(is_mastered=False)
 
+        # Bypass pagination if paginate=false is passed
+        paginate = request.query_params.get('paginate', 'true').strip().lower()
+        if paginate == 'false':
+            serializer = WordSerializer(words, many=True)
+            return Response(serializer.data)
+
         paginator = WordPagination()
         page = paginator.paginate_queryset(words, request)
         if page is not None:
@@ -428,7 +434,9 @@ class NotebookExportPDFView(APIView):
                 safe_options,
                 cache_key
             ],
-            queue=target_queue
+            kwargs={
+                'user_tier': tier,
+            }
         )
 
         # 6. Tính toán vị trí hàng đợi động và thời gian chờ dự kiến

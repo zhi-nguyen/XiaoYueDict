@@ -146,8 +146,8 @@ class SubmitAssessmentView(APIView):
             kwargs={
                 'rate_limit_user_id': rate_limit_user_id,
                 'duration_limit': duration_limit,
-            },
-            queue=target_queue
+                'user_tier': user_tier,
+            }
         )
 
 

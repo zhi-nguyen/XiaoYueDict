@@ -44,19 +44,24 @@ class TriggerTTSView(APIView):
         # 3. Resolve user_id / guest_id for WebSocket routing
         if request.user.is_authenticated:
             user_id = str(request.user.id)
+            user_tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
         else:
             user_id = request.headers.get('X-Guest-ID') or request.query_params.get('guest_id')
             if not user_id:
                 user_id = f"guest_{uuid.uuid4()}"
+            user_tier = 'Guest'
 
         # 4. Trigger Celery background task
         task_id = str(uuid.uuid4())
-        generate_tts_audio_task.delay(
-            task_id=task_id,
-            user_id=user_id,
-            text=text,
-            voice=voice,
-            cache_key=cache_key
+        generate_tts_audio_task.apply_async(
+            kwargs={
+                'task_id': task_id,
+                'user_id': user_id,
+                'text': text,
+                'voice': voice,
+                'cache_key': cache_key,
+                'user_tier': user_tier
+            }
         )
 
         logger.info(f"Enqueued async TTS task {task_id} for user {user_id}. Text length: {len(text)}")

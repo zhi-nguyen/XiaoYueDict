@@ -6,7 +6,7 @@ from .models import ZhExample
 from core_project.ws_utils import ws_notify
 
 @shared_task(bind=True, max_retries=5, default_retry_delay=5)
-def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi'):
+def translate_pure_text_task(self, text_input, user_id=None, direction='zh_vi', **kwargs):
     """
     Celery task to handle async translation via Database lookup or Vertex AI Priority PayGo.
     """

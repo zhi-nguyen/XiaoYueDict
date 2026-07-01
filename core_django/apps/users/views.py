@@ -301,8 +301,7 @@ class FirebaseLoginView(APIView):
 
             transaction.on_commit(
                 lambda: sync_firebase_avatar_task.apply_async(
-                    args=[str(user.id), picture_url],
-                    queue='queue_core'
+                    args=[str(user.id), picture_url]
                 )
             )
 

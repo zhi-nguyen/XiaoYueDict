@@ -101,10 +101,10 @@ class GenerateExerciseView(APIView):
 
         # 3. Trigger Async Celery Task
         user_id = str(request.user.id)
+        user_tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
         task = generate_exercises_task.apply_async(
             args=[word, lang],
-            kwargs={'user_id': user_id},
-            queue='queue_core'
+            kwargs={'user_id': user_id, 'user_tier': user_tier}
         )
         
         # Save processing status for 5 minutes
@@ -137,10 +137,10 @@ class CheckWritingView(APIView):
             )
 
         user_id = str(request.user.id)
+        user_tier = getattr(request.user.subscription, 'tier', 'Free') if hasattr(request.user, 'subscription') else 'Free'
         task = check_writing_task.apply_async(
             args=[sentence, target_word, lang],
-            kwargs={'user_id': user_id},
-            queue='queue_core'
+            kwargs={'user_id': user_id, 'user_tier': user_tier}
         )
 
         return Response({
